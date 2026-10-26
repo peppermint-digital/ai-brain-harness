@@ -834,6 +834,10 @@ gezeigtem Pane), unabhängig davon, ob jemand zusieht. Daran erkennt AI Brain,
 ob das Gerät für Agent-Befehle erreichbar ist. Kennt eine Instanz den
 Endpunkt noch nicht (404), schlägt die Leitung still weiter.
 
+Das Protokoll (`leitung.log` neben der Verbindung, `leitung status` nennt den
+Pfad) wird über Neustarts fortgeschrieben, damit die letzten Zeilen vor einem
+Abriss erhalten bleiben. Ab 1 MB liegt der alte Teil als `leitung.log.1`.
+
 ### Der Tray
 
 `ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop (Linux,

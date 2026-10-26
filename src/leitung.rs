@@ -78,6 +78,10 @@ const VORGABE_DAUER: i64 = 30 * 60;
 
 const FRIST_HTTP: Duration = Duration::from_secs(15);
 
+/// Ab dieser Grösse beginnt das Protokoll beim nächsten Start neu (das alte
+/// bleibt als `leitung.log.1`).
+const PROTOKOLL_GROESSE: u64 = 1024 * 1024;
+
 /// Vorgabe und Obergrenze einer Befehlsfrist, wie bei `rechner-befehl`.
 const FRIST_BEFEHL_VORGABE: u64 = 60;
 const FRIST_BEFEHL_HOECHST: u64 = 600;
@@ -383,7 +387,17 @@ fn abgekoppelt_starten() -> Result<u32, String> {
     let programm = std::env::current_exe().map_err(|e| format!("Eigener Pfad unbekannt: {e}"))?;
     let protokoll = ablage("leitung.log")?;
 
-    let datei = std::fs::File::create(&protokoll)
+    // Anhängen statt neu anlegen: Die letzten Zeilen vor einem Neustart sind
+    // genau die, nach denen man bei einem Abriss sucht. Zu gross geworden,
+    // wandert die Datei einmal nach `.1`.
+    if std::fs::metadata(&protokoll).is_ok_and(|m| m.len() > PROTOKOLL_GROESSE) {
+        let _ = std::fs::rename(&protokoll, protokoll.with_extension("log.1"));
+    }
+
+    let datei = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&protokoll)
         .map_err(|e| format!("{} ist nicht schreibbar: {e}", protokoll.display()))?;
     let fehler = datei
         .try_clone()
