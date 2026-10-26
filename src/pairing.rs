@@ -273,10 +273,15 @@ fn poll_for_token(
 
                 return Ok(token.access_token);
             }
-            Err(ureq::Error::Status(_, response)) => {
-                let err: OAuthError = response
-                    .into_json()
-                    .map_err(|e| format!("Fehlerantwort ist unlesbar: {e}"))?;
+            Err(ureq::Error::Status(code, response)) => {
+                // Erst als Text lesen: ist es kein JSON (eine HTML-Fehlerseite
+                // des Proxys, ein 500), sind Code und Anfang des Rumpfs das
+                // Einzige, womit sich die Ursache finden lässt.
+                let text = response.into_string().unwrap_or_default();
+                let err: OAuthError = serde_json::from_str(&text).map_err(|_| {
+                    let anfang: String = text.chars().take(200).collect();
+                    format!("Fehlerantwort (HTTP {code}) ist kein JSON: {}", anfang.trim())
+                })?;
 
                 match err.error.as_str() {
                     // Der Normalfall, solange niemand bestätigt hat.
