@@ -1532,7 +1532,7 @@ impl Steuerung {
             }
             Eingabe::Ende { pane } => {
                 if self.tap.as_ref().is_some_and(|t| t.pane == pane) {
-                    self.tap_beenden();
+                    self.tap_beenden("ende vom Browser");
                 }
             }
             Eingabe::Befehl(befehl) => {
@@ -1550,7 +1550,7 @@ impl Steuerung {
     /// `bool` sagt, ob er gerade neu ist.
     fn tap_fuer(&mut self, pane: &str) -> Option<(&mut Tap, bool)> {
         if self.tap.as_ref().is_some_and(|t| t.pane != pane) {
-            self.tap_beenden();
+            self.tap_beenden(&format!("Wechsel zu {pane}"));
         }
 
         let neu = self.tap.is_none();
@@ -1580,9 +1580,9 @@ impl Steuerung {
     /// schlösse es dessen Sitzung — und `geraet_live_begonnen` des neuen fiele
     /// ins Leere, weil Brain die Sitzung zu dem Zeitpunkt noch offen sah.
     /// Ein Pane-Wechsel kostet damit höchstens einen POST, und das ist es wert.
-    fn tap_beenden(&mut self) {
+    fn tap_beenden(&mut self, grund: &str) {
         if let Some(tap) = self.tap.take() {
-            melden(&format!("beende {}", tap.pane));
+            melden(&format!("beende {}: {grund}", tap.pane));
             lage_pane(None);
 
             if let Some(buendler) = tap.beenden() {
@@ -1594,7 +1594,7 @@ impl Steuerung {
     /// Ein Tap, dessen Pane endete, wird weggeräumt.
     fn aufraeumen(&mut self) {
         if self.tap.as_mut().is_some_and(|t| !t.lebt()) {
-            self.tap_beenden();
+            self.tap_beenden("Pane oder Tap endete");
         }
     }
 
@@ -1603,7 +1603,7 @@ impl Steuerung {
             z.beenden();
         }
 
-        self.tap_beenden();
+        self.tap_beenden("Leitung legt auf");
     }
 }
 
