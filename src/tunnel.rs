@@ -10,6 +10,16 @@
 //! SSH-Rückwärtstunnel, bis `127.0.0.1:<port>` hier antwortet. Danach zeigen
 //! `agent-browser --cdp <port>` und die `-tunnel`-MCPs auf diesen Browser.
 //!
+//! ## Das Fenster ist geteilt
+//!
+//! Mehrere Sitzungen hängen am selben Port und damit am selben Browser. Jede
+//! arbeitet deshalb in **ihrem eigenen Tab**, öffnet ihn selbst und schliesst
+//! nur ihn: nie `close --all`, nie `open`/`navigate` auf einem Tab, den sie
+//! nicht angelegt hat. Anlass: Eine Sitzung navigierte den vorhandenen Tab
+//! weg, während der Mensch darin gerade auf der Peppermint-Connect-
+//! Anmeldeseite stand. Die Meldung „Bereit" und die Beschreibung von
+//! `tunnel-start` sagen das jedem Agenten, der den Tunnel benutzt.
+//!
 //! ## Herkunft und der eine Unterschied
 //!
 //! Gebaut nach `~/.local/bin/agent-tunnel` (chezmoi, Commit 365afa0) von der
@@ -558,9 +568,23 @@ fn protokoll_schwanz(port: u16, was: &str) -> String {
     format!("\n{}", letzte.join("\n"))
 }
 
+/// Die Regel für das geteilte Fenster — steht in jeder Meldung, nach der ein
+/// Agent den Browser benutzt, denn mehrere Sitzungen hängen am selben.
+fn geteilt(port: u16) -> String {
+    format!(
+        "Das Fenster ist geteilt — arbeite nur in einem EIGENEN Tab:\n\
+         \x20 agent-browser --cdp {port} --pin-tab tab new <url> … am Ende tab close\n\
+         \x20 Playwright: browser_tabs new/close · DevTools: new_page/select_page/close_page\n\
+         Nie close --all, nie open/navigate auf einem Tab, den du nicht selbst geoeffnet hast."
+    )
+}
+
 fn hier_starten(nach: &str, port: u16) -> Result<String, String> {
     if browser_antwortet(port) && laeuft(port, "ssh") {
-        return Ok(format!("Steht schon: 127.0.0.1:{port} zeigt auf einen Browser."));
+        return Ok(format!(
+            "Steht schon: 127.0.0.1:{port} zeigt auf einen Browser.\n{}",
+            geteilt(port)
+        ));
     }
 
     // **Ein fremder Browser auf dem Port ist kein Geschenk.**
@@ -847,7 +871,8 @@ fn ueber_betreiber(wunsch: &Wunsch) -> Result<String, String> {
 
                 if bericht.contains("Browser: laeuft") && bericht.contains("Tunnel : laeuft") {
                     return Ok(format!(
-                        "Steht schon: 127.0.0.1:{port} zeigt auf den Browser von {von}."
+                        "Steht schon: 127.0.0.1:{port} zeigt auf den Browser von {von}.\n{}",
+                        geteilt(port)
                     ));
                 }
 
@@ -873,9 +898,9 @@ fn ueber_betreiber(wunsch: &Wunsch) -> Result<String, String> {
             }
 
             Ok(format!(
-                "Bereit: der Browser von {von} ist hier unter 127.0.0.1:{port}.\n\
-                 Benutzen mit: agent-browser --cdp {port}\n\
-                 Am Ende schliessen mit: tunnel-stop (oder ai-brain-harness tunnel stop)"
+                "Bereit: der Browser von {von} ist hier unter 127.0.0.1:{port}.\n{}\n\
+                 Am Ende schliessen mit: tunnel-stop (oder ai-brain-harness tunnel stop)",
+                geteilt(port)
             ))
         }
         Tat::Zustand | Tat::Beenden => {
@@ -1035,7 +1060,9 @@ pub fn werkzeuge() -> Vec<serde_json::Value> {
                             Zum eigenen Pruefen und Testen genuegt agent-browser headless, \
                             dafuer ist das hier nicht gedacht. Danach zeigt 127.0.0.1:<port> \
                             auf jenen Browser (agent-browser --cdp, playwright-tunnel, \
-                            chrome-devtools-tunnel).",
+                            chrome-devtools-tunnel). Das Fenster ist geteilt: nur in einem \
+                            eigenen, selbst geoeffneten Tab arbeiten und nur ihn schliessen, \
+                            nie close --all, nie vorhandene Tabs navigieren.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "von": von, "port": port },
@@ -1302,6 +1329,16 @@ mod tests {
     }
 
     // -- Als MCP-Werkzeuge ---------------------------------------------------
+
+    #[test]
+    fn wer_den_browser_bekommt_erfaehrt_dass_er_geteilt_ist() {
+        let regel = geteilt(9222);
+        assert!(regel.contains("--cdp 9222 --pin-tab tab new"));
+        assert!(regel.contains("Nie close --all"));
+
+        let start = werkzeuge()[0]["description"].as_str().unwrap().to_string();
+        assert!(start.contains("eigenen, selbst geoeffneten Tab"));
+    }
 
     #[test]
     fn die_drei_werkzeuge_sind_da_und_richtig_markiert() {
