@@ -1003,7 +1003,7 @@ fn seite_schieben(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>) {
         }
     };
 
-    let rumpf = serde_json::json!({ "seite": html, "version": version }).to_string();
+    let rumpf = serde_json::json!({ "html": html, "version": version }).to_string();
 
     if rumpf.len() > GRENZE_SEITE {
         melden(&format!("FEHLER: Seite wiegt {} Bytes, nicht gesendet.", rumpf.len()));
