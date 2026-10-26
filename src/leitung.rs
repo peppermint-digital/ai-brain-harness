@@ -1078,6 +1078,10 @@ impl Zuschauer {
         let stopp = halt.clone();
 
         let faden = std::thread::spawn(move || {
+            // imkr kann sich unter einer laufenden Leitung erneuern; wer jetzt
+            // zusieht, soll die Seite der Fassung bekommen, die antwortet.
+            seite_wenn_neu(&c, &endgueltig);
+
             let mut zuletzt: Option<(Instant, String)> = None;
 
             loop {
