@@ -20,3 +20,8 @@ strip = true
 lto = true
 codegen-units = 1
 opt-level = "z"
+
+# Der Tray ist ein eigenes Binary: Er braucht eine Desktop-Sitzung, der
+# Harness nicht — und ein Tray-Absturz soll keine Leitung kappen.
+[workspace]
+members = ["tray"]

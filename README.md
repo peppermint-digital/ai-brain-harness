@@ -812,6 +812,36 @@ Und deshalb überwacht der Taktgeber sich **nicht** selbst — das wäre derselb
 Zirkel. Bleibt er stehen, kommen keine Meldungen, und die Gegenstelle schlägt
 Alarm.
 
+## Live-Leitung
+
+Die Leitung zeigt ein imkr-Pane dieses Rechners live in AI Brain und nimmt
+Tastendrücke von dort an. Der Rechner verbindet sich dafür **ausgehend**
+(Reverb, Pusher-Protokoll); AI Brain ruft hier nie etwas auf.
+
+```bash
+ai-brain-harness leitung an --dauer 30m     # einschalten, höchstens 8 h
+ai-brain-harness leitung status [--json]    # Schalter, Prozess, Verbindung
+ai-brain-harness leitung aus                # auflegen
+```
+
+Standard ist **aus**, und der Schalter läuft ab. Ohne gültigen Schalter wird
+nicht einmal der Kanal erfragt; fällt er, legt die Leitung selbst auf. Gezeigt
+werden nur Panes dieses Rechners, und Tastendrücke stehen nie im Protokoll.
+
+### Der Tray
+
+`ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop (Linux,
+StatusNotifier, z. B. waybar). Es zeigt, ob die Leitung steht und welches Pane
+sie zeigt, und schaltet sie für 30 min, 2 h oder 8 h ein oder aus. Die Regeln
+bleiben im Harness: der Tray ruft nur `leitung status --json`, `an` und `aus`.
+
+```bash
+cargo build --release -p ai-brain-tray
+ai-brain-tray --autostart                   # beim Anmelden starten
+```
+
+Auf einem Rechner ohne Bildschirm (codingmachine) gehört er nicht hin.
+
 ## Der eigene Loop
 
 Bis Oktober 2026 mietete der Harness fremde Schleifen: `claude` und `codex`. Das
