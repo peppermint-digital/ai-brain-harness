@@ -15,9 +15,9 @@
 //! Mehrere Sitzungen hängen am selben Port und damit am selben Browser. Jede
 //! arbeitet deshalb in **ihrem eigenen Tab**, öffnet ihn selbst und schliesst
 //! nur ihn: nie `close --all`, nie `open`/`navigate` auf einem Tab, den sie
-//! nicht angelegt hat. Anlass: Eine Sitzung navigierte den vorhandenen Tab
-//! weg, während der Mensch darin gerade auf der Peppermint-Connect-
-//! Anmeldeseite stand. Die Meldung „Bereit" und die Beschreibung von
+//! nicht angelegt hat. Anlass: Eine Sitzung überschrieb einen vorhandenen
+//! Tab eines anderen Vorgangs (eine liegengebliebene Peppermint-Connect-
+//! Anmeldeseite). Die Meldung „Bereit" und die Beschreibung von
 //! `tunnel-start` sagen das jedem Agenten, der den Tunnel benutzt.
 //!
 //! ## Herkunft und der eine Unterschied
