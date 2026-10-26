@@ -1029,7 +1029,10 @@ fn seite_schieben(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>) {
 
     match anfrage(c, "POST", PFAD_SEITE, Some(&rumpf)) {
         Ok(_) => {
-            melden(&format!("Seite für imkr {version} geschickt."));
+            melden(&format!(
+                "Seite für imkr {version} geschickt ({} Bytes).",
+                rumpf.len()
+            ));
             if let Ok(pfad) = ablage("leitung-seite.txt") {
                 let _ = std::fs::write(pfad, &version);
             }
@@ -1097,7 +1100,15 @@ impl Zuschauer {
                             let rumpf = serde_json::json!({ "zustand": serde_json::from_str::<serde_json::Value>(&zustand).unwrap_or_default() }).to_string();
 
                             match anfrage(&c, "POST", PFAD_ZUSTAND, Some(&rumpf)) {
-                                Ok(_) => zuletzt = Some((Instant::now(), zustand)),
+                                Ok(_) => {
+                                    if zuletzt.is_none() {
+                                        melden(&format!(
+                                            "Zustand angenommen ({} Bytes).",
+                                            rumpf.len()
+                                        ));
+                                    }
+                                    zuletzt = Some((Instant::now(), zustand));
+                                }
                                 Err(HttpFehler::Verboten(grund)) => {
                                     verbieten(&endgueltig, &grund);
                                     break;
@@ -1375,6 +1386,7 @@ impl Steuerung {
                 }
             },
             Eingabe::Seite => {
+                melden("Seite angefordert.");
                 let c = self.c.clone();
                 let e = self.endgueltig.clone();
                 std::thread::spawn(move || seite_schieben(&c, &e));
