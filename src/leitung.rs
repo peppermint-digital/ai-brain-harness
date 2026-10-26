@@ -989,6 +989,22 @@ fn senden_auftrag(daten: &str) -> Option<serde_json::Value> {
     wert.get("auftrag").filter(|a| !a.is_null()).cloned()
 }
 
+/// Der `auftrag` eines abgelehnten `befehl` oder `lesen` — bei `befehl` auch
+/// verschachtelt, wie [`eingabe_lesen`] ihn annimmt.
+fn abgelehnter_auftrag(daten: &str) -> Option<serde_json::Value> {
+    let wert: serde_json::Value = serde_json::from_str(daten).ok()?;
+    let art = wert.get("art")?.as_str()?;
+
+    if art != "befehl" && art != "lesen" {
+        return None;
+    }
+
+    wert.get("auftrag")
+        .or_else(|| wert.get("befehl")?.get("auftrag"))
+        .filter(|a| !a.is_null())
+        .cloned()
+}
+
 /// Liest ein `senden`. Das Pane kommt hier als Nummer plus Sitzung, wie
 /// `imkr web send` es nimmt — nicht als `sitzung/nummer`.
 fn senden_lesen(wert: &serde_json::Value) -> Result<Senden, String> {
@@ -1587,6 +1603,11 @@ impl Steuerung {
                 if let Some(auftrag) = senden_auftrag(daten) {
                     let c = self.c.clone();
                     std::thread::spawn(move || senden_ergebnis(&c, Some(&auftrag), &Err(grund)));
+                } else if let Some(auftrag) = abgelehnter_auftrag(daten) {
+                    // Dasselbe für `befehl` und `lesen`: der Agent soll den
+                    // Grund lesen, statt bis zur Frist „keine Antwort“ zu sehen.
+                    let c = self.c.clone();
+                    std::thread::spawn(move || abgelehnt_melden(&c, &auftrag, &grund));
                 }
                 return;
             }
@@ -2324,6 +2345,34 @@ fn lesen_melden(c: &Connection, lesen: &Lesen) {
     ergebnis_melden(c, &lesen.auftrag, exit, &ausgabe, abgebrochen);
 }
 
+/// Ein abgelehntes `befehl`/`lesen`: kein Exit-Code, der Grund als Ausgabe.
+/// Nichts davon ist gelaufen — auch nicht teilweise.
+pub fn abgelehnt_rumpf(auftrag: &serde_json::Value, grund: &str) -> String {
+    serde_json::json!({
+        "auftrag": auftrag,
+        "exit": null,
+        "ausgabe": grund,
+        "gekuerzt": false,
+        "abgebrochen": false,
+        "abgelehnt": true,
+    })
+    .to_string()
+}
+
+fn abgelehnt_melden(c: &Connection, auftrag: &serde_json::Value, grund: &str) {
+    match anfrage(
+        c,
+        "POST",
+        "geraete/befehl-ergebnis",
+        Some(&abgelehnt_rumpf(auftrag, grund)),
+    ) {
+        Ok(_) => melden(&format!("Ablehnung für Auftrag {auftrag} gemeldet.")),
+        Err(e) => melden(&format!(
+            "Ablehnung für Auftrag {auftrag} nicht gemeldet: {e:?}"
+        )),
+    }
+}
+
 /// Meldet ein Ergebnis an `geraete/befehl-ergebnis` — für `befehl` und `lesen`.
 fn ergebnis_melden(
     c: &Connection,
@@ -2519,6 +2568,37 @@ fn melden(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abgelehntes_lesen_und_befehl_haben_einen_empfaenger() {
+        assert_eq!(
+            abgelehnter_auftrag(r#"{"art":"lesen","pane":"-s/0","auftrag":"a1"}"#),
+            Some(serde_json::json!("a1"))
+        );
+        assert_eq!(
+            abgelehnter_auftrag(
+                r#"{"art":"befehl","pane":"x","befehl":{"befehl":"ls","auftrag":7}}"#
+            ),
+            Some(serde_json::json!(7))
+        );
+        assert_eq!(
+            abgelehnter_auftrag(r#"{"art":"lesen","pane":"-s/0"}"#),
+            None
+        );
+        assert_eq!(
+            abgelehnter_auftrag(r#"{"art":"tasten","auftrag":"a1"}"#),
+            None
+        );
+
+        let r: serde_json::Value = serde_json::from_str(&abgelehnt_rumpf(
+            &serde_json::json!("a1"),
+            "Pane abgelehnt.",
+        ))
+        .unwrap();
+        assert_eq!(r["exit"], serde_json::Value::Null);
+        assert_eq!(r["abgelehnt"], true);
+        assert_eq!(r["ausgabe"], "Pane abgelehnt.");
+    }
 
     #[test]
     fn lesen_fuehrt_nur_imkr_read_aus_egal_was_mitkommt() {
