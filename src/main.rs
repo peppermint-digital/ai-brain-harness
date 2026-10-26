@@ -37,11 +37,13 @@ mod freigabe;
 mod imkr;
 mod frage;
 mod konto;
+mod leitung;
 mod maske;
 mod mcp;
 mod mcp_eintraege;
 mod nachricht;
 mod pairing;
+mod pusher;
 mod rechner;
 mod schleife;
 mod register;
@@ -77,6 +79,8 @@ Aufrufe:
                                   kontakte | senden <person> <text> |
                                   abholen | bestaetigen <nummer>
   ai-brain-harness freigabe [...]     Verzeichnisse fuer Laeufe mit mehr Rechten
+  ai-brain-harness leitung [...]      Live-Leitung: ein imkr-Pane in AI Brain zeigen
+                                  (an [--dauer 30m] | aus | status), Standard aus
   ai-brain-harness logs <kennung>     Was ein Lauf geschrieben hat
   ai-brain-harness stop <kennung>     Einen Lauf beenden
   ai-brain-harness status             Zeigt die aktuelle Verbindung
@@ -219,6 +223,7 @@ fn main() -> ExitCode {
         Some("schleife") => schleife::verwalten(&args[1..]),
         Some("verbrauch") => verbrauch::verwalten(&args[1..]),
         Some("tunnel") => tunnel::verwalten(&args[1..]),
+        Some("leitung") => leitung::verwalten(&args[1..]),
         Some("erinnerungen") => erinnerungen::abgleichen(&args[1..]),
         Some("auftraege") => auftrag::anzeigen(&args[1..]),
         Some("auftrag") => auftrag::annehmen(&args[1..]),
