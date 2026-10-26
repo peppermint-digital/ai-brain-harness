@@ -88,7 +88,7 @@ Live-Leitung zu AI Brain: ein imkr-Pane im Browser zeigen und steuern.
 Aufrufe:
   ai-brain-harness leitung an [--dauer 30m]   einschalten (hoechstens 8h; s, m oder h)
   ai-brain-harness leitung aus                ausschalten und auflegen
-  ai-brain-harness leitung status             Schalter und Verbindung zeigen
+  ai-brain-harness leitung status [--json]    Schalter und Verbindung zeigen
   ai-brain-harness leitung laufen             die Leitung im Vordergrund halten
 
 Standard ist AUS. Ohne gueltigen Schalter baut der Rechner keine Verbindung
@@ -168,6 +168,10 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("an") => an(&args[1..]),
         Some("aus") => aus(),
+        Some("status") | None if args.get(1).map(String::as_str) == Some("--json") => {
+            println!("{}", status_json()?);
+            Ok(())
+        }
         Some("status") | None => status(),
         Some("laufen") => laufen(),
         Some("--help") | Some("-h") | Some("help") => {
@@ -282,6 +286,88 @@ fn status() -> Result<(), String> {
     println!("Protokoll: {}", ablage("leitung.log")?.display());
 
     Ok(())
+}
+
+/// Dasselbe wie `status`, für Programme — der Tray liest es.
+///
+/// `lage` stammt aus `leitung-zustand.json` und gilt nur, solange der Prozess
+/// lebt — oder wenn er endgültig aufgelegt hat, damit der Grund sichtbar
+/// bleibt. Was ein abgestürzter Prozess zurückliess, zählt nicht.
+fn status_json() -> Result<String, String> {
+    let prozess = laufende_pid();
+    let lage = std::fs::read_to_string(ablage(ZUSTAND_DATEI)?)
+        .ok()
+        .and_then(|roh| serde_json::from_str::<Lage>(&roh).ok())
+        .filter(|l| lage_gilt(l, prozess.is_some()));
+
+    Ok(serde_json::json!({
+        "an": schalter_lesen().is_some(),
+        "bis": schalter_lesen(),
+        "prozess": prozess,
+        "lage": lage,
+        "protokoll": ablage("leitung.log")?,
+    })
+    .to_string())
+}
+
+fn lage_gilt(lage: &Lage, prozess_lebt: bool) -> bool {
+    prozess_lebt || lage.stand == "aufgelegt"
+}
+
+// ---------------------------------------------------------------------------
+// Die Zustandsdatei
+// ---------------------------------------------------------------------------
+
+/// Wo `laufen` festhält, wie es der Leitung gerade geht.
+const ZUSTAND_DATEI: &str = "leitung-zustand.json";
+
+/// Wie es der Leitung geht — für den Tray, der sie nur anzeigt.
+///
+/// Eine Datei statt eines Sockets: Der Tray ruft ohnehin `leitung status
+/// --json`, und so gibt es keinen zweiten Weg in den laufenden Prozess.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lage {
+    /// `verbindet`, `verbunden`, `getrennt` (versucht es wieder) oder
+    /// `aufgelegt` (endgültig, z. B. 403).
+    pub stand: String,
+    /// Seit wann (Unix-Sekunden).
+    pub seit: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grund: Option<String>,
+    /// Das Pane, das gerade gezeigt wird.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+}
+
+static LAGE: Mutex<Option<Lage>> = Mutex::new(None);
+
+/// Setzt den Stand und schreibt die Datei; das Pane bleibt, wie es ist.
+fn lage_stand(stand: &str, grund: Option<&str>) {
+    lage_aendern(|l| {
+        if l.stand != stand {
+            l.seit = jetzt();
+        }
+        l.stand = stand.to_string();
+        l.grund = grund.map(str::to_string);
+    });
+}
+
+fn lage_pane(pane: Option<&str>) {
+    lage_aendern(|l| l.pane = pane.map(str::to_string));
+}
+
+fn lage_aendern(f: impl FnOnce(&mut Lage)) {
+    let Ok(mut g) = LAGE.lock() else { return };
+    let lage = g.get_or_insert_with(Lage::default);
+    f(lage);
+
+    // Erst daneben schreiben, dann umbenennen: der Tray liest nie eine halbe Datei.
+    if let Ok(pfad) = ablage(ZUSTAND_DATEI) {
+        let neu = pfad.with_extension("json.neu");
+        if std::fs::write(&neu, serde_json::to_string(lage).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&neu, &pfad);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +501,7 @@ fn laufen() -> Result<(), String> {
     std::fs::write(&merker_pfad, format!("{}\n", std::process::id()))
         .map_err(|e| format!("{} ist nicht schreibbar: {e}", merker_pfad.display()))?;
     let _merker = Merker(merker_pfad);
+    lage_stand("verbindet", None);
 
     let connection = config::load()?;
     let mut steuerung = Steuerung::neu(connection.clone());
@@ -433,10 +520,12 @@ fn laufen() -> Result<(), String> {
             }
             Err(Abbruch::Endgueltig(grund)) => {
                 melden(&grund);
+                lage_stand("aufgelegt", Some(&grund));
                 break Err(grund);
             }
             Err(Abbruch::Wieder(grund)) => {
                 melden(&format!("{grund} — neuer Versuch in {pause} s."));
+                lage_stand("getrennt", Some(&grund));
 
                 // In Sekundenschritten, damit ein Ausschalten auch während der
                 // Pause sofort greift.
@@ -453,6 +542,12 @@ fn laufen() -> Result<(), String> {
     };
 
     steuerung.alles_beenden();
+
+    // Ein endgültiges Auflegen bleibt stehen, damit der Tray den Grund zeigt;
+    // ein Ausschalten räumt auf.
+    if ergebnis.is_ok() {
+        let _ = std::fs::remove_file(ablage(ZUSTAND_DATEI)?);
+    }
 
     ergebnis
 }
@@ -495,6 +590,7 @@ fn sitzung(c: &Connection, st: &mut Steuerung, pause: &mut u64) -> Result<(), Ab
         .map_err(Abbruch::Wieder)?;
 
     melden(&format!("verbunden, höre auf {}", kanal.kanal_eingabe));
+    lage_stand("verbunden", None);
     *pause = 1;
 
     {
@@ -1440,6 +1536,7 @@ impl Steuerung {
             match Tap::starten(&self.c, pane, self.endgueltig.clone()) {
                 Ok(tap) => {
                     melden(&format!("zeige {pane}"));
+                    lage_pane(Some(pane));
                     self.tap = Some(tap);
                 }
                 Err(grund) => {
@@ -1463,6 +1560,7 @@ impl Steuerung {
     fn tap_beenden(&mut self) {
         if let Some(tap) = self.tap.take() {
             melden(&format!("beende {}", tap.pane));
+            lage_pane(None);
 
             if let Some(buendler) = tap.beenden() {
                 let _ = buendler.join();
@@ -2259,6 +2357,20 @@ fn melden(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lage_zaehlt_nur_mit_prozess_ausser_aufgelegt() {
+        let lage = |stand: &str| Lage {
+            stand: stand.to_string(),
+            ..Lage::default()
+        };
+        assert!(lage_gilt(&lage("verbunden"), true));
+        assert!(!lage_gilt(&lage("verbunden"), false));
+        assert!(lage_gilt(&lage("aufgelegt"), false));
+
+        let json = serde_json::to_string(&lage("verbunden")).unwrap();
+        assert!(!json.contains("grund") && !json.contains("pane"));
+    }
 
     #[test]
     fn seite_mit_eigener_seq_stoert_die_tasten_nicht() {
