@@ -610,6 +610,7 @@ fn sitzung(c: &Connection, st: &mut Steuerung, pause: &mut u64) -> Result<(), Ab
             return Ok(());
         }
 
+
         st.aufraeumen();
 
         if let Some(grund) = st.endgueltig.lock().ok().and_then(|mut g| g.take()) {
@@ -697,7 +698,15 @@ fn api_url(c: &Connection, pfad: &str) -> String {
 
 /// Was die Instanz als Grund nennt — `message` (Laravel) oder `fehler`.
 fn grund(antwort: ureq::Response) -> String {
-    let text = antwort.into_string().unwrap_or_default();
+    grund_aus(&antwort.into_string().unwrap_or_default())
+}
+
+/// Der lesbare Teil einer Fehlerantwort. Eine HTML-Seite (etwa vom Proxy,
+/// während Brain neu startet) wird nicht ins Protokoll gekippt.
+fn grund_aus(text: &str) -> String {
+    if text.trim_start().starts_with('<') {
+        return "HTML-Seite statt JSON (Proxy oder Neustart?)".to_string();
+    }
 
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()
@@ -707,7 +716,7 @@ fn grund(antwort: ureq::Response) -> String {
                 .and_then(|m| m.as_str())
                 .map(str::to_string)
         })
-        .unwrap_or(text)
+        .unwrap_or_else(|| text.chars().take(300).collect())
 }
 
 /// Eine Anfrage an `/api/v1/…`, mit einem frischen Token bei 401.
@@ -1179,6 +1188,9 @@ impl Zuschauer {
             seite_wenn_neu(&c, &endgueltig);
 
             let mut zuletzt: Option<(Instant, String)> = None;
+            // Brain startet mal neu; dann zählt der erste Fehler und die Erholung,
+            // nicht jede Sekunde dazwischen.
+            let mut gestoert = false;
 
             loop {
                 let still = h.lock().map(|z| z.elapsed()).unwrap_or(ZUSCHAUER_STILLE);
@@ -1201,6 +1213,10 @@ impl Zuschauer {
 
                             match anfrage(&c, "POST", PFAD_ZUSTAND, Some(&rumpf)) {
                                 Ok(_) => {
+                                    if gestoert {
+                                        melden("Zustand wieder angenommen.");
+                                        gestoert = false;
+                                    }
                                     if zuletzt.is_none() {
                                         melden(&format!(
                                             "Zustand angenommen ({} Bytes).",
@@ -1213,7 +1229,14 @@ impl Zuschauer {
                                     verbieten(&endgueltig, &grund);
                                     break;
                                 }
-                                Err(e) => melden(&format!("Zustand nicht geschickt: {e:?}")),
+                                Err(e) => {
+                                    if !gestoert {
+                                        melden(&format!(
+                                            "Zustand nicht geschickt: {e:?} — melde erst die Erholung."
+                                        ));
+                                    }
+                                    gestoert = true;
+                                }
                             }
                         }
                     }
@@ -2357,6 +2380,16 @@ fn melden(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_fehlerseite_landet_nicht_im_protokoll() {
+        assert_eq!(
+            grund_aus("<!doctype html>\n<html><title>NetBird Service</title>"),
+            "HTML-Seite statt JSON (Proxy oder Neustart?)"
+        );
+        assert_eq!(grund_aus(r#"{"message":"zu gross"}"#), "zu gross");
+        assert_eq!(grund_aus(&"x".repeat(1000)).len(), 300);
+    }
 
     #[test]
     fn lage_zaehlt_nur_mit_prozess_ausser_aufgelegt() {
