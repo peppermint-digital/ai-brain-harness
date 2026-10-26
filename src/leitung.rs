@@ -813,6 +813,8 @@ pub enum Eingabe {
     Seite,
     /// In ein Pane tippen, über `imkr web send`.
     Senden(Senden),
+    /// Die letzten Zeilen eines Panes lesen, für einen Agenten.
+    Lesen(Lesen),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -829,6 +831,23 @@ pub struct Senden {
     pub enter: bool,
 }
 
+/// `art: lesen` — die letzten Zeilen eines Panes, für einen Agenten (#8792).
+///
+/// **Bewusst ohne Textfeld.** Ausgeführt wird ausschliesslich `imkr read
+/// <pane> --lines <zeilen>`, gebaut hier aus Adresse und Zahl. Könnte ein
+/// `lesen` je einen mitgeschickten Befehl ausführen, wäre „darf sehen“ nur ein
+/// anderes Wort für „darf befehlen“ — und diese Grenze hängt allein hier.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Lesen {
+    pub pane: String,
+    pub zeilen: u64,
+    pub frist: u64,
+    pub auftrag: serde_json::Value,
+}
+
+const LESEN_ZEILEN_VORGABE: u64 = 50;
+const LESEN_ZEILEN_HOECHST: u64 = 2000;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Befehl {
     pub pane: String,
@@ -844,7 +863,9 @@ pub fn pane_gueltig(pane: &str) -> bool {
         return false;
     };
 
+    // Kein führendes `-`: sonst läse imkr die Adresse als Option.
     !sitzung.is_empty()
+        && !sitzung.starts_with('-')
         && sitzung
             .chars()
             .all(|z| z.is_ascii_alphanumeric() || matches!(z, '-' | '_' | '.'))
@@ -937,6 +958,24 @@ pub fn eingabe_lesen(daten: &str) -> Result<Eingabe, String> {
                 auftrag,
             }))
         }
+        "lesen" => Ok(Eingabe::Lesen(Lesen {
+            pane,
+            zeilen: wert
+                .get("zeilen")
+                .and_then(|z| z.as_u64())
+                .unwrap_or(LESEN_ZEILEN_VORGABE)
+                .clamp(1, LESEN_ZEILEN_HOECHST),
+            frist: wert
+                .get("frist")
+                .and_then(|f| f.as_u64())
+                .unwrap_or(FRIST_BEFEHL_VORGABE)
+                .clamp(1, FRIST_BEFEHL_HOECHST),
+            auftrag: wert
+                .get("auftrag")
+                .filter(|a| !a.is_null())
+                .cloned()
+                .ok_or("Lesen ohne auftrag — das Ergebnis hätte keinen Empfänger.")?,
+        })),
         anders => Err(format!("Unbekannte Eingabe-Art „{anders}“.")),
     }
 }
@@ -1599,6 +1638,14 @@ impl Steuerung {
                 let c = self.c.clone();
                 std::thread::spawn(move || befehl_melden(&c, &befehl));
             }
+            Eingabe::Lesen(lesen) => {
+                melden(&format!(
+                    "Lesen für Auftrag {}: {} Zeilen aus {}",
+                    lesen.auftrag, lesen.zeilen, lesen.pane
+                ));
+                let c = self.c.clone();
+                std::thread::spawn(move || lesen_melden(&c, &lesen));
+            }
         }
     }
 
@@ -2256,12 +2303,41 @@ fn json_laenge(text: &str) -> usize {
 /// Fährt einen Befehl und meldet das Ergebnis an Brain.
 fn befehl_melden(c: &Connection, befehl: &Befehl) {
     let (exit, ausgabe, abgebrochen) = befehl_fahren(befehl);
-    let (ausgabe, gekuerzt) = kuerzen(&ausgabe, GRENZE_ERGEBNIS);
+    ergebnis_melden(c, &befehl.auftrag, exit, &ausgabe, abgebrochen);
+}
+
+/// Die Befehlszeile für `lesen` — nur aus Adresse und Zahl gebaut.
+pub fn lesen_zeile(lesen: &Lesen) -> Vec<String> {
+    vec![
+        "read".into(),
+        lesen.pane.clone(),
+        "--lines".into(),
+        lesen.zeilen.to_string(),
+    ]
+}
+
+/// Liest das Pane und meldet den Fensterinhalt auf demselben Weg wie ein
+/// Befehlsergebnis.
+fn lesen_melden(c: &Connection, lesen: &Lesen) {
+    let (exit, ausgabe, abgebrochen) =
+        imkr_mit_frist(&lesen_zeile(lesen), Duration::from_secs(lesen.frist));
+    ergebnis_melden(c, &lesen.auftrag, exit, &ausgabe, abgebrochen);
+}
+
+/// Meldet ein Ergebnis an `geraete/befehl-ergebnis` — für `befehl` und `lesen`.
+fn ergebnis_melden(
+    c: &Connection,
+    auftrag: &serde_json::Value,
+    exit: Option<i32>,
+    ausgabe: &[u8],
+    abgebrochen: bool,
+) {
+    let (ausgabe, gekuerzt) = kuerzen(ausgabe, GRENZE_ERGEBNIS);
 
     // `exit` steht IMMER drin, auch als null (Vertrag): ein fehlendes Feld
     // hiesse für Brain etwas anderes als „kein Exit-Code“.
     let rumpf = serde_json::json!({
-        "auftrag": befehl.auftrag,
+        "auftrag": auftrag,
         "exit": exit,
         "ausgabe": ausgabe,
         "gekuerzt": gekuerzt,
@@ -2271,18 +2347,15 @@ fn befehl_melden(c: &Connection, befehl: &Befehl) {
 
     match anfrage(c, "POST", "geraete/befehl-ergebnis", Some(&rumpf)) {
         Ok(_) => melden(&format!(
-            "Ergebnis für Auftrag {} gemeldet (exit {exit:?}).",
-            befehl.auftrag
+            "Ergebnis für Auftrag {auftrag} gemeldet (exit {exit:?})."
         )),
         // Unbekannt, abgelaufen, fremd oder schon gemeldet: ein Neuversuch
         // träfe dieselbe Antwort.
         Err(HttpFehler::Unbekannt(grund)) => melden(&format!(
-            "Auftrag {} kennt Brain nicht (mehr) — verworfen: {grund}",
-            befehl.auftrag
+            "Auftrag {auftrag} kennt Brain nicht (mehr) — verworfen: {grund}"
         )),
         Err(e) => melden(&format!(
-            "Ergebnis für Auftrag {} nicht gemeldet: {e:?}",
-            befehl.auftrag
+            "Ergebnis für Auftrag {auftrag} nicht gemeldet: {e:?}"
         )),
     }
 }
@@ -2326,9 +2399,45 @@ pub fn sh_quote(text: &str) -> String {
 
 fn befehl_fahren(befehl: &Befehl) -> (Option<i32>, Vec<u8>, bool) {
     let ist_agent = imkr::zustand(&befehl.pane) != PaneZustand::Weg;
+    let beginn = Instant::now();
 
+    // imkr run hat seine eigene Frist; unsere ist der Riegel dahinter,
+    // und `msg --wait` hat keine.
+    let (exit, ausgabe, mut abgebrochen) = imkr_mit_frist(
+        &befehl_zeile(befehl, ist_agent),
+        Duration::from_secs(befehl.frist + 5),
+    );
+
+    // `imkr run` gibt nach seiner Frist auf, der Befehl im Pane läuft aber
+    // weiter (nachgesehen: `sleep 30` mit Frist 2 stand danach noch dort).
+    // Abgebrochen ist er erst mit einem Ctrl+C.
+    if !ist_agent && beginn.elapsed() >= Duration::from_secs(befehl.frist) {
+        abgebrochen = true;
+
+        if let Some((sitzung, nummer)) = befehl.pane.split_once('/') {
+            let _ = Command::new("imkr")
+                .args([
+                    "-s",
+                    sitzung,
+                    "send",
+                    "--pane",
+                    nummer,
+                    "--no-enter",
+                    "\u{3}",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+
+    (exit, ausgabe, abgebrochen)
+}
+
+/// Ruft imkr mit einer Frist; nach ihr wird der Aufruf beendet.
+fn imkr_mit_frist(args: &[String], frist: Duration) -> (Option<i32>, Vec<u8>, bool) {
     let mut kind = match Command::new("imkr")
-        .args(befehl_zeile(befehl, ist_agent))
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2357,9 +2466,6 @@ fn befehl_fahren(befehl: &Befehl) -> (Option<i32>, Vec<u8>, bool) {
     let aus = kind.stdout.take().map(|s| leeren(Box::new(s)));
     let fehl = kind.stderr.take().map(|s| leeren(Box::new(s)));
 
-    // imkr run hat seine eigene Frist; unsere ist der Riegel dahinter,
-    // und `msg --wait` hat keine.
-    let frist = Duration::from_secs(befehl.frist + 5);
     let beginn = Instant::now();
     let mut abgebrochen = false;
 
@@ -2377,29 +2483,6 @@ fn befehl_fahren(befehl: &Befehl) -> (Option<i32>, Vec<u8>, bool) {
             Err(_) => break None,
         }
     };
-
-    // `imkr run` gibt nach seiner Frist auf, der Befehl im Pane läuft aber
-    // weiter (nachgesehen: `sleep 30` mit Frist 2 stand danach noch dort).
-    // Abgebrochen ist er erst mit einem Ctrl+C.
-    if !ist_agent && beginn.elapsed() >= Duration::from_secs(befehl.frist) {
-        abgebrochen = true;
-
-        if let Some((sitzung, nummer)) = befehl.pane.split_once('/') {
-            let _ = Command::new("imkr")
-                .args([
-                    "-s",
-                    sitzung,
-                    "send",
-                    "--pane",
-                    nummer,
-                    "--no-enter",
-                    "\u{3}",
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
 
     let mut ausgabe = aus.and_then(|h| h.join().ok()).unwrap_or_default();
     ausgabe.extend(fehl.and_then(|h| h.join().ok()).unwrap_or_default());
@@ -2436,6 +2519,41 @@ fn melden(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lesen_fuehrt_nur_imkr_read_aus_egal_was_mitkommt() {
+        let Ok(Eingabe::Lesen(l)) = eingabe_lesen(
+            r#"{"art":"lesen","pane":"bau/2","auftrag":"a1","befehl":"rm -rf ~","text":"x"}"#,
+        ) else {
+            panic!("lesen nicht erkannt");
+        };
+        assert_eq!(l.zeilen, LESEN_ZEILEN_VORGABE);
+        assert_eq!(l.frist, FRIST_BEFEHL_VORGABE);
+        assert_eq!(lesen_zeile(&l), vec!["read", "bau/2", "--lines", "50"]);
+    }
+
+    #[test]
+    fn lesen_deckelt_und_verlangt_auftrag() {
+        let Ok(Eingabe::Lesen(l)) = eingabe_lesen(
+            r#"{"art":"lesen","pane":"bau/2","zeilen":99999,"frist":99999,"auftrag":"a1"}"#,
+        ) else {
+            panic!("lesen nicht erkannt");
+        };
+        assert_eq!(
+            (l.zeilen, l.frist),
+            (LESEN_ZEILEN_HOECHST, FRIST_BEFEHL_HOECHST)
+        );
+
+        assert!(eingabe_lesen(r#"{"art":"lesen","pane":"bau/2"}"#).is_err());
+        assert!(eingabe_lesen(r#"{"art":"lesen","pane":"laptop:bau/2","auftrag":"a"}"#).is_err());
+    }
+
+    #[test]
+    fn sitzung_mit_bindestrich_vorn_ist_keine_adresse() {
+        assert!(!pane_gueltig("-s/0"));
+        assert!(!pane_gueltig("--help/1"));
+        assert!(pane_gueltig("mein-bau/1"));
+    }
 
     #[test]
     fn html_fehlerseite_landet_nicht_im_protokoll() {
