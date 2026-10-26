@@ -1225,8 +1225,8 @@ const LUECKE_WARTEN: Duration = Duration::from_millis(300);
 /// Fehlt eine Nummer, wird [`LUECKE_WARTEN`] gewartet und dann weitergemacht:
 /// ein verlorenes Ereignis darf das Terminal nicht anhalten. Was danach noch
 /// eintrifft, geht sofort durch statt verloren — eine Taste zu spät ist
-/// besser als eine verschluckte. Ereignisse ohne `seq` gehen ungeordnet
-/// durch, wie bisher.
+/// besser als eine verschluckte. Alles außer `tasten` geht ungeordnet
+/// durch, auch mit `seq`.
 pub struct Ordner {
     naechste: Option<u64>,
     puffer: BTreeMap<u64, String>,
@@ -1245,8 +1245,11 @@ impl Ordner {
 
     /// Ein Ereignis kommt an; zurück kommt, was jetzt verarbeitet werden kann.
     pub fn eingang(&mut self, daten: String, jetzt: Instant) -> Vec<String> {
+        // Nur Tasten zählen auf derselben Folge; `seite` hat einen eigenen
+        // Zähler je Gerät und würde sonst Lücken vortäuschen.
         let seq = serde_json::from_str::<serde_json::Value>(&daten)
             .ok()
+            .filter(|v| v.get("art").and_then(|a| a.as_str()) == Some("tasten"))
             .and_then(|v| v.get(EINGABE_SEQ)?.as_u64());
 
         let Some(seq) = seq else {
@@ -2240,6 +2243,17 @@ fn melden(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seite_mit_eigener_seq_stoert_die_tasten_nicht() {
+        let t = Instant::now();
+        let mut o = Ordner::neu();
+        let taste = |n: u64| format!(r#"{{"art":"tasten","pane":"imkr/3","b64":"YQ==","seq":{n}}}"#);
+        assert_eq!(o.eingang(taste(0), t), vec![taste(0)]);
+        let seite = r#"{"art":"seite","seq":7}"#.to_string();
+        assert_eq!(o.eingang(seite.clone(), t), vec![seite]);
+        assert_eq!(o.eingang(taste(1), t), vec![taste(1)]);
+    }
 
     #[test]
     fn auftrag_auch_aus_unlesbarem_senden() {
