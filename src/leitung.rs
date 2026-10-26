@@ -602,6 +602,7 @@ fn sitzung(c: &Connection, st: &mut Steuerung, pause: &mut u64) -> Result<(), Ab
     // Je Verbindung neu: nach einem Neuaufbau zählt die Gegenseite womöglich
     // anders weiter, und ein alter Puffer hielte dann Ereignisse fest.
     let mut ordner = Ordner::neu();
+    let mut letzter_schlag: Option<Instant> = None;
 
     loop {
         if !schalter_gilt() {
@@ -610,6 +611,13 @@ fn sitzung(c: &Connection, st: &mut Steuerung, pause: &mut u64) -> Result<(), Ab
             return Ok(());
         }
 
+        if letzter_schlag.is_none_or(|t| t.elapsed() >= HERZSCHLAG_TAKT) {
+            let erster = letzter_schlag.is_none();
+            letzter_schlag = Some(Instant::now());
+            let c = c.clone();
+            let e = st.endgueltig.clone();
+            std::thread::spawn(move || herzschlag(&c, &e, erster));
+        }
 
         st.aufraeumen();
 
@@ -1155,6 +1163,54 @@ fn seite_wenn_neu(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>) {
 
     if imkr_version().is_some_and(|v| gemerkt.as_deref() != Some(v.as_str())) {
         seite_schieben(c, endgueltig);
+    }
+}
+
+/// Herzschlag: solange die Leitung steht, unabhängig von Zuschauern (#8792).
+/// Daran sieht Brain, ob das Gerät für Agent-Befehle live ist.
+const PFAD_HERZSCHLAG: &str = "geraete/herzschlag";
+const HERZSCHLAG_TAKT: Duration = Duration::from_secs(60);
+
+fn herzschlag_rumpf(imkr: Option<&str>, pane: Option<&str>) -> String {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "imkr": imkr,
+        "pane": pane,
+    })
+    .to_string()
+}
+
+/// Ob Brain den Herzschlag schon einmal mit 404 abgelehnt hat.
+static HERZSCHLAG_UNBEKANNT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Gemeldet wird nur der erste Schlag je Verbindung und jeder Fehler —
+/// sonst stünde das Protokoll jede Minute voll.
+///
+/// **404 ist kein Fehler.** Es heisst: diese Brain-Instanz kennt den
+/// Herzschlag noch nicht. Brain bleibt fail-closed und schickt Befehle
+/// trotzdem mit Frist los; der Schlag macht die Meldung nur freundlicher.
+/// Deshalb einmal erwähnen und still weiterschlagen, statt jemanden suchen
+/// zu lassen.
+fn herzschlag(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>, erster: bool) {
+    use std::sync::atomic::Ordering;
+
+    let pane = LAGE.lock().ok().and_then(|l| l.as_ref()?.pane.clone());
+    let rumpf = herzschlag_rumpf(imkr_version().as_deref(), pane.as_deref());
+
+    match anfrage(c, "POST", PFAD_HERZSCHLAG, Some(&rumpf)) {
+        Ok(_) => {
+            if erster || HERZSCHLAG_UNBEKANNT.swap(false, Ordering::Relaxed) {
+                melden("Herzschlag angenommen, weiter alle 60 s.");
+            }
+        }
+        Err(HttpFehler::Unbekannt(_)) => {
+            if !HERZSCHLAG_UNBEKANNT.swap(true, Ordering::Relaxed) {
+                melden("Brain kennt den Herzschlag noch nicht (404) — schlage still weiter.");
+            }
+        }
+        Err(HttpFehler::Verboten(grund)) => verbieten(endgueltig, &grund),
+        Err(e) => melden(&format!("Herzschlag nicht angenommen: {e:?}")),
     }
 }
 
@@ -2392,6 +2448,17 @@ mod tests {
     }
 
     #[test]
+    fn herzschlag_ist_klein_und_nennt_fehlendes_als_null() {
+        let r: serde_json::Value = serde_json::from_str(&herzschlag_rumpf(None, None)).unwrap();
+        assert_eq!(r["imkr"], serde_json::Value::Null);
+        assert_eq!(r["pane"], serde_json::Value::Null);
+        assert_eq!(r["version"], env!("CARGO_PKG_VERSION"));
+
+        let r = herzschlag_rumpf(Some("0.21.70"), Some("default/0"));
+        assert!(r.len() < 100);
+    }
+
+    #[test]
     fn lage_zaehlt_nur_mit_prozess_ausser_aufgelegt() {
         let lage = |stand: &str| Lage {
             stand: stand.to_string(),
@@ -2409,7 +2476,8 @@ mod tests {
     fn seite_mit_eigener_seq_stoert_die_tasten_nicht() {
         let t = Instant::now();
         let mut o = Ordner::neu();
-        let taste = |n: u64| format!(r#"{{"art":"tasten","pane":"imkr/3","b64":"YQ==","seq":{n}}}"#);
+        let taste =
+            |n: u64| format!(r#"{{"art":"tasten","pane":"imkr/3","b64":"YQ==","seq":{n}}}"#);
         assert_eq!(o.eingang(taste(0), t), vec![taste(0)]);
         let seite = r#"{"art":"seite","seq":7}"#.to_string();
         assert_eq!(o.eingang(seite.clone(), t), vec![seite]);

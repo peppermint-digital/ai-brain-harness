@@ -828,6 +828,12 @@ Standard ist **aus**, und der Schalter läuft ab. Ohne gültigen Schalter wird
 nicht einmal der Kanal erfragt; fällt er, legt die Leitung selbst auf. Gezeigt
 werden nur Panes dieses Rechners, und Tastendrücke stehen nie im Protokoll.
 
+Solange die Leitung steht, schickt sie alle 60 s einen Herzschlag
+(`POST /api/v1/geraete/herzschlag` mit Harness-Version, imkr-Version und
+gezeigtem Pane), unabhängig davon, ob jemand zusieht. Daran erkennt AI Brain,
+ob das Gerät für Agent-Befehle erreichbar ist. Kennt eine Instanz den
+Endpunkt noch nicht (404), schlägt die Leitung still weiter.
+
 ### Der Tray
 
 `ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop (Linux,
