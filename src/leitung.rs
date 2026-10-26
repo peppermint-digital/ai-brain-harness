@@ -590,9 +590,7 @@ impl HttpFehler {
             HttpFehler::Vorbei => Abbruch::Wieder("AI Brain meldet 409.".to_string()),
             HttpFehler::ZuGross { grund, .. }
             | HttpFehler::Unbekannt(grund)
-            | HttpFehler::Sonst(grund) => {
-                Abbruch::Wieder(grund)
-            }
+            | HttpFehler::Sonst(grund) => Abbruch::Wieder(grund),
         }
     }
 }
@@ -706,9 +704,9 @@ pub enum Eingabe {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Senden {
-    /// Brain schickt (noch) keinen; dann gibt es auch kein Ergebnis zu melden.
+    /// Brains UUID, unverändert zurückzugeben; ohne sie kein Ergebnis.
     pub auftrag: Option<serde_json::Value>,
-    /// `null` oder der Name dieses Rechners — fremde Rechner sind Stufe 2.
+    /// Brain schickt keinen; ein fremder Name wäre ein Fehler dort. Sonst
     /// `null` oder ein Name DIESES Geräts. Brain leitet nach Gerät weiter und
     /// setzt hier den Gerätenamen aus „Meine Geräte“, nicht den von imkr.
     pub host: Option<String>,
@@ -830,6 +828,15 @@ pub fn eingabe_lesen(daten: &str) -> Result<Eingabe, String> {
     }
 }
 
+/// Der `auftrag` eines `senden`-Ereignisses, auch wenn der Rest nicht taugt.
+fn senden_auftrag(daten: &str) -> Option<serde_json::Value> {
+    let wert: serde_json::Value = serde_json::from_str(daten).ok()?;
+    if wert.get("art")?.as_str()? != "senden" {
+        return None;
+    }
+    wert.get("auftrag").filter(|a| !a.is_null()).cloned()
+}
+
 /// Liest ein `senden`. Das Pane kommt hier als Nummer plus Sitzung, wie
 /// `imkr web send` es nimmt — nicht als `sitzung/nummer`.
 fn senden_lesen(wert: &serde_json::Value) -> Result<Senden, String> {
@@ -883,8 +890,8 @@ fn senden_lesen(wert: &serde_json::Value) -> Result<Senden, String> {
 // Vertrag der AI-Brain-Seite vom 26.10.2026 (#530).
 const PFAD_ZUSTAND: &str = "geraete/zustand";
 const PFAD_SEITE: &str = "geraete/seite";
-/// VORLÄUFIG: Brain hat für `senden` (noch) keinen Ergebnis-Weg. Gemeldet wird
-/// nur, wenn das Ereignis einen `auftrag` trägt.
+/// `{auftrag, ok, error?}`; Brain zeigt `error` wortgleich an, also nur
+/// Sätze, die ein Mensch lesen kann. Gemeldet wird nur mit `auftrag`.
 const PFAD_SENDEN: &str = "geraete/senden-ergebnis";
 
 /// Was die Seite wiegen darf; Brain antwortet darüber mit 422.
@@ -903,7 +910,11 @@ const ZUSCHAUER_STILLE: Duration = Duration::from_secs(30);
 fn imkr_web(was: &str, eingabe: Option<&str>) -> Result<String, String> {
     let mut kind = Command::new("imkr")
         .args(["web", was])
-        .stdin(if eingabe.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if eingabe.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -975,7 +986,10 @@ pub fn host_erlaubt(host: Option<&str>, rechner: &str, geraet: &str, client_id: 
     };
 
     let kennung: String = rest.chars().filter(|z| z.is_ascii_alphanumeric()).collect();
-    let id: String = client_id.chars().filter(|z| z.is_ascii_alphanumeric()).collect();
+    let id: String = client_id
+        .chars()
+        .filter(|z| z.is_ascii_alphanumeric())
+        .collect();
 
     kennung.len() >= 4 && id.starts_with(&kennung)
 }
@@ -1006,7 +1020,10 @@ fn seite_schieben(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>) {
     let rumpf = serde_json::json!({ "html": html, "version": version }).to_string();
 
     if rumpf.len() > GRENZE_SEITE {
-        melden(&format!("FEHLER: Seite wiegt {} Bytes, nicht gesendet.", rumpf.len()));
+        melden(&format!(
+            "FEHLER: Seite wiegt {} Bytes, nicht gesendet.",
+            rumpf.len()
+        ));
         return;
     }
 
@@ -1154,14 +1171,23 @@ fn senden_melden(c: &Connection, s: &Senden) {
         }
     })();
 
-    let Some(auftrag) = &s.auftrag else {
-        if let Err(fehler) = &ergebnis {
+    senden_ergebnis(c, s.auftrag.as_ref(), &ergebnis);
+}
+
+/// Meldet Brain, ob ein `senden` ankam. Ohne `auftrag` fragt niemand danach.
+fn senden_ergebnis(
+    c: &Connection,
+    auftrag: Option<&serde_json::Value>,
+    ergebnis: &Result<(), String>,
+) {
+    let Some(auftrag) = auftrag else {
+        if let Err(fehler) = ergebnis {
             melden(&format!("Senden scheiterte: {fehler}"));
         }
         return;
     };
 
-    let rumpf = match &ergebnis {
+    let rumpf = match ergebnis {
         Ok(()) => serde_json::json!({ "auftrag": auftrag, "ok": true }),
         Err(fehler) => serde_json::json!({ "auftrag": auftrag, "ok": false, "error": fehler }),
     }
@@ -1173,7 +1199,9 @@ fn senden_melden(c: &Connection, s: &Senden) {
             "Senden für Auftrag {auftrag} gemeldet ({}).",
             if ergebnis.is_ok() { "ok" } else { "Fehler" }
         )),
-        Err(e) => melden(&format!("Senden-Ergebnis für Auftrag {auftrag} nicht gemeldet: {e:?}")),
+        Err(e) => melden(&format!(
+            "Senden-Ergebnis für Auftrag {auftrag} nicht gemeldet: {e:?}"
+        )),
     }
 }
 
@@ -1322,6 +1350,12 @@ impl Steuerung {
             Ok(e) => e,
             Err(grund) => {
                 melden(&grund);
+                // Ein unlesbares `senden` mit Auftrag bekommt trotzdem eine
+                // Antwort — sonst wartet der Browser vergeblich.
+                if let Some(auftrag) = senden_auftrag(daten) {
+                    let c = self.c.clone();
+                    std::thread::spawn(move || senden_ergebnis(&c, Some(&auftrag), &Err(grund)));
+                }
                 return;
             }
         };
@@ -2207,6 +2241,15 @@ fn melden(text: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn auftrag_auch_aus_unlesbarem_senden() {
+        let daten = r#"{"art":"senden","pane":"","session":"bau","text":"x","enter":true,"auftrag":"9f1c"}"#;
+        assert!(eingabe_lesen(daten).is_err());
+        assert_eq!(senden_auftrag(daten), Some(serde_json::json!("9f1c")));
+        assert_eq!(senden_auftrag(r#"{"art":"senden","pane":1}"#), None);
+        assert_eq!(senden_auftrag(r#"{"art":"befehl","auftrag":"9f1c"}"#), None);
+    }
+
     fn b64(bytes: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
@@ -2351,7 +2394,10 @@ mod tests {
         assert!(o.eingang(ereignis(3, "h"), t0).is_empty(), "2 fehlt noch");
         assert_eq!(tasten(&o.eingang(ereignis(2, "c"), t0)), "ch");
         assert_eq!(tasten(&o.eingang(ereignis(4, "o"), t0)), "o");
-        assert!(o.takt(t0 + Duration::from_secs(5)).is_empty(), "nichts offen");
+        assert!(
+            o.takt(t0 + Duration::from_secs(5)).is_empty(),
+            "nichts offen"
+        );
     }
 
     #[test]
@@ -2361,13 +2407,24 @@ mod tests {
 
         o.eingang(ereignis(1, "a"), t0);
         assert!(o.eingang(ereignis(3, "c"), t0).is_empty());
-        assert!(o.eingang(ereignis(4, "d"), t0 + Duration::from_millis(100)).is_empty());
-        assert!(o.takt(t0 + Duration::from_millis(250)).is_empty(), "noch warten");
+        assert!(o
+            .eingang(ereignis(4, "d"), t0 + Duration::from_millis(100))
+            .is_empty());
+        assert!(
+            o.takt(t0 + Duration::from_millis(250)).is_empty(),
+            "noch warten"
+        );
         assert_eq!(tasten(&o.takt(t0 + Duration::from_millis(300))), "cd");
 
         // Der Nachzügler geht sofort durch, statt verloren zu gehen.
-        assert_eq!(tasten(&o.eingang(ereignis(2, "b"), t0 + Duration::from_millis(400))), "b");
-        assert_eq!(tasten(&o.eingang(ereignis(5, "e"), t0 + Duration::from_millis(400))), "e");
+        assert_eq!(
+            tasten(&o.eingang(ereignis(2, "b"), t0 + Duration::from_millis(400))),
+            "b"
+        );
+        assert_eq!(
+            tasten(&o.eingang(ereignis(5, "e"), t0 + Duration::from_millis(400))),
+            "e"
+        );
     }
 
     #[test]
@@ -2388,22 +2445,34 @@ mod tests {
 
     #[test]
     fn web_eingaben() {
-        assert_eq!(eingabe_lesen(r#"{"art":"zuschauer","seq":3}"#), Ok(Eingabe::Zuschauer));
-        assert_eq!(eingabe_lesen(r#"{"art":"seite","seq":4}"#), Ok(Eingabe::Seite));
+        assert_eq!(
+            eingabe_lesen(r#"{"art":"zuschauer","seq":3}"#),
+            Ok(Eingabe::Zuschauer)
+        );
+        assert_eq!(
+            eingabe_lesen(r#"{"art":"seite","seq":4}"#),
+            Ok(Eingabe::Seite)
+        );
 
         let Ok(Eingabe::Senden(s)) = eingabe_lesen(
             r#"{"art":"senden","seq":5,"auftrag":"s-1","host":null,"session":"default","pane":2,"text":"ls","enter":true}"#,
         ) else {
             panic!("senden nicht gelesen");
         };
-        assert_eq!((s.session.as_str(), s.pane, s.enter, s.host), ("default", 2, true, None));
+        assert_eq!(
+            (s.session.as_str(), s.pane, s.enter, s.host),
+            ("default", 2, true, None)
+        );
 
         let Ok(Eingabe::Senden(s)) = eingabe_lesen(
             r#"{"art":"senden","auftrag":7,"host":"laptop","session":"imker","pane":"0","text":""}"#,
         ) else {
             panic!("pane als Text nicht gelesen");
         };
-        assert_eq!((s.pane, s.enter, s.host.as_deref()), (0, false, Some("laptop")));
+        assert_eq!(
+            (s.pane, s.enter, s.host.as_deref()),
+            (0, false, Some("laptop"))
+        );
 
         let Ok(Eingabe::Senden(ohne)) =
             eingabe_lesen(r#"{"art":"senden","session":"x","pane":"1","text":"a","enter":true}"#)
@@ -2411,8 +2480,14 @@ mod tests {
             panic!("senden ohne auftrag (Brain-Vertrag) nicht gelesen");
         };
         assert_eq!(ohne.auftrag, None);
-        assert!(eingabe_lesen(r#"{"art":"senden","auftrag":1,"session":"a b","pane":1,"text":"a"}"#).is_err());
-        assert!(eingabe_lesen(r#"{"art":"senden","auftrag":1,"session":"x","pane":-1,"text":"a"}"#).is_err());
+        assert!(eingabe_lesen(
+            r#"{"art":"senden","auftrag":1,"session":"a b","pane":1,"text":"a"}"#
+        )
+        .is_err());
+        assert!(eingabe_lesen(
+            r#"{"art":"senden","auftrag":1,"session":"x","pane":-1,"text":"a"}"#
+        )
+        .is_err());
     }
 
     #[test]
@@ -2429,12 +2504,34 @@ mod tests {
         let id = "011dbb98-3dee-4a43";
         assert!(host_erlaubt(None, "laptop", "harness-probe", id));
         assert!(host_erlaubt(Some("laptop"), "laptop", "harness-probe", id));
-        assert!(host_erlaubt(Some("harness-probe"), "laptop", "harness-probe", id), "Gerätename aus Brain");
-        assert!(host_erlaubt(Some("harness-probe 011d"), "laptop", "harness-probe", id), "mit Kennung");
-        assert!(host_erlaubt(Some("harness-probe·011dbb"), "laptop", "harness-probe", id));
-        assert!(!host_erlaubt(Some("harness-probe 99ab"), "laptop", "harness-probe", id), "fremde Kennung");
-        assert!(!host_erlaubt(Some("harness-probe-x"), "laptop", "harness-probe", id), "zu kurz");
-        assert!(!host_erlaubt(Some("codingmachine"), "laptop", "harness-probe", id));
+        assert!(
+            host_erlaubt(Some("harness-probe"), "laptop", "harness-probe", id),
+            "Gerätename aus Brain"
+        );
+        assert!(
+            host_erlaubt(Some("harness-probe 011d"), "laptop", "harness-probe", id),
+            "mit Kennung"
+        );
+        assert!(host_erlaubt(
+            Some("harness-probe·011dbb"),
+            "laptop",
+            "harness-probe",
+            id
+        ));
+        assert!(
+            !host_erlaubt(Some("harness-probe 99ab"), "laptop", "harness-probe", id),
+            "fremde Kennung"
+        );
+        assert!(
+            !host_erlaubt(Some("harness-probe-x"), "laptop", "harness-probe", id),
+            "zu kurz"
+        );
+        assert!(!host_erlaubt(
+            Some("codingmachine"),
+            "laptop",
+            "harness-probe",
+            id
+        ));
     }
 
     #[test]
@@ -2661,18 +2758,29 @@ mod tests {
         let mut b = Buendler::neu("imkr/3");
         let aus = b.aufnehmen(vec![TapZeile::Aus(b"vorher".to_vec()), TapZeile::Ende]);
 
-        assert!(aus.is_empty(), "ein ende ohne Vollbild träfe die Sitzung des ganzen Geräts");
+        assert!(
+            aus.is_empty(),
+            "ein ende ohne Vollbild träfe die Sitzung des ganzen Geräts"
+        );
         assert!(b.beendet);
 
         // Ein Vollbild, das nie ankam, eröffnet auch keine Sitzung.
         let mut b = Buendler::neu("imkr/3");
-        b.aufnehmen(vec![TapZeile::Schirm { bytes: b"x".to_vec(), rows: 1, cols: 1 }]);
+        b.aufnehmen(vec![TapZeile::Schirm {
+            bytes: b"x".to_vec(),
+            rows: 1,
+            cols: 1,
+        }]);
         assert!(b.aufnehmen(vec![TapZeile::Ende]).is_empty());
 
         // Im selben Schub zählt es: es geht vor dem ende hinaus.
         let mut b = Buendler::neu("imkr/3");
         let aus = parse(&b.aufnehmen(vec![
-            TapZeile::Schirm { bytes: b"x".to_vec(), rows: 1, cols: 1 },
+            TapZeile::Schirm {
+                bytes: b"x".to_vec(),
+                rows: 1,
+                cols: 1,
+            },
             TapZeile::Ende,
         ]));
         assert_eq!(aus.len(), 2);
@@ -2688,7 +2796,11 @@ mod tests {
         assert_eq!(b.roh, ROH_BLOCK * 9 / 25);
 
         let bunt: Vec<u8> = (0..100_000u32).map(|i| (i % 32) as u8).collect();
-        let aus = b.aufnehmen(vec![TapZeile::Schirm { bytes: bunt, rows: 1, cols: 1 }]);
+        let aus = b.aufnehmen(vec![TapZeile::Schirm {
+            bytes: bunt,
+            rows: 1,
+            cols: 1,
+        }]);
 
         assert!(aus.iter().all(|block| block.json.len() <= 20_000));
 
@@ -2700,7 +2812,11 @@ mod tests {
         let erster = aus.into_iter().next().unwrap();
         b.nicht_angenommen(&erster);
         b.verloren(0);
-        let neu = parse(&b.aufnehmen(vec![TapZeile::Schirm { bytes: b"y".to_vec(), rows: 1, cols: 1 }]));
+        let neu = parse(&b.aufnehmen(vec![TapZeile::Schirm {
+            bytes: b"y".to_vec(),
+            rows: 1,
+            cols: 1,
+        }]));
         assert_eq!(neu[0]["seq"], 0);
     }
 
@@ -2755,11 +2871,19 @@ mod tests {
             "gekuerzt": true, "abgebrochen": false,
         })
         .to_string();
-        assert!(rumpf.len() <= 40_000, "Brain lehnt über 40 000 Bytes ab: {}", rumpf.len());
+        assert!(
+            rumpf.len() <= 40_000,
+            "Brain lehnt über 40 000 Bytes ab: {}",
+            rumpf.len()
+        );
 
         // Die Messung stimmt mit serde_json überein.
         for z in ["a", "\"", "\\", "\n", "\u{1}", "\u{7f}", "ä", "€", "😀"] {
-            assert_eq!(json_laenge(z), serde_json::to_string(z).unwrap().len() - 2, "{z:?}");
+            assert_eq!(
+                json_laenge(z),
+                serde_json::to_string(z).unwrap().len() - 2,
+                "{z:?}"
+            );
         }
     }
 }
