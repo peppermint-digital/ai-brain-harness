@@ -62,6 +62,17 @@ impl Kern {
         !matches!(self.wissen, Wissen::Unbekannt)
     }
 
+    /// Der Störfall: Der Schalter steht auf aus, ein Prozess läuft trotzdem.
+    ///
+    /// Das Häkchen deckt diesen Fall NICHT ab — es wäre leer, und ein Klick
+    /// darauf würde einschalten statt aufzuräumen. `leitung aus` ist dafür
+    /// das Werkzeug: Der Harness verträgt den Aufruf im Leerlauf, lässt die
+    /// Leitung selbst auflegen und beendet den Prozess erst, wenn er nach
+    /// acht Sekunden nicht reagiert.
+    pub fn aufraeumen_noetig(&self) -> bool {
+        matches!(&self.wissen, Wissen::Da(s) if !s.an && s.prozess.is_some())
+    }
+
     pub fn protokoll(&self) -> Option<String> {
         match &self.wissen {
             Wissen::Da(s) => s.protokoll.clone(),
@@ -77,18 +88,26 @@ impl Kern {
         self.ausfuehren(&["leitung", "aus"]);
     }
 
-    /// Der Linksklick.
+    /// Das Häkchen „Live-Leitung" im Menü.
     ///
-    /// ## Warum es den gibt (Stand 27.10.2026)
+    /// ## Wo das herkommt, und wohin es gewandert ist (Stand 27.10.2026)
     ///
-    /// Bis zum 27.10.2026 hatte der Tray nur ein Menü. In waybar — und in den
-    /// meisten Leisten — öffnet der **Rechtsklick** das Menü, der Linksklick
-    /// löst `Activate` aus. Ohne `activate` tat ein Linksklick also
-    /// **nichts**, und von aussen sah das aus wie ein Tray, der sich nicht
-    /// schalten und nicht beenden lässt: Genau so wurde es gemeldet.
+    /// Zuerst hatte der Tray nur ein Menü und keine Behandlung von
+    /// `Activate`. In waybar — und in den meisten Leisten — öffnet der
+    /// Rechtsklick das Menü, der Linksklick löst `Activate` aus. Ohne
+    /// Behandlung tat ein Linksklick also **nichts**, und von aussen sah das
+    /// aus wie ein Tray, der sich nicht schalten und nicht beenden lässt.
+    /// Gemeldet wurde genau das.
     ///
-    /// Ein Klick, der nichts tut, ist schlimmer als kein Klick — er lässt
-    /// einen am Programm zweifeln statt an der Bedienung.
+    /// Darauf schaltete der Linksklick die Leitung. Das löste den toten Klick
+    /// und schuf den nächsten Punkt: Das Menü liess sich nicht mehr
+    /// schliessen, weil wir es selbst öffneten statt es der Leiste zu
+    /// überlassen — und ein Symbolklick, der etwas schaltet, ist in keiner
+    /// anderen Leiste so.
+    ///
+    /// Jetzt öffnet der Linksklick das Menü (`ItemIsMenu`, siehe `linux`),
+    /// und hier hängt das **Häkchen** darin. Haken rein heisst `leitung an`
+    /// und hebt ein Veto auf, Haken raus heisst `leitung aus` und setzt es.
     ///
     /// Wissen wir nichts, wird NICHT geschaltet: Ein Klick, der mangels
     /// Antwort das Gegenteil des Gewollten tut, wäre der nächste Ärger.

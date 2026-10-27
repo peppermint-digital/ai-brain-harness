@@ -151,9 +151,7 @@ fn pfad(e: &Eintrag) -> Result<PathBuf, String> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .ok_or("Weder XDG_CONFIG_HOME noch HOME gesetzt.")?;
 
-    Ok(basis
-        .join("autostart")
-        .join(format!("{}.desktop", e.datei)))
+    Ok(basis.join("autostart").join(format!("{}.desktop", e.datei)))
 }
 
 #[cfg(target_os = "linux")]
@@ -354,7 +352,8 @@ mod tests {
         label: "de.peppermint.ai-brain-leitung",
         datei: "ai-brain-leitung",
         name: "AI Brain — Leitung",
-        kommentar: "Haelt die Leitung zu AI Brain, solange ein Channel diesen Rechner freigegeben hat",
+        kommentar:
+            "Haelt die Leitung zu AI Brain, solange ein Channel diesen Rechner freigegeben hat",
         run_wert: "ai-brain-leitung",
         args: &["leitung", "dienst"],
     };

@@ -1038,8 +1038,28 @@ ohnehin, ob sie steht.
 
 #### Bedienung und Symbol
 
-- **Linksklick** schaltet die Leitung (ein für 30 min, oder aus).
-- **Rechtsklick** öffnet das Menü: Dauern, Protokoll, Beenden.
+- **Linksklick** öffnet das Menü, ein zweiter Klick schließt es wieder — wie
+  bei jedem anderen Tray-Programm.
+- **Rechtsklick** öffnet es ebenfalls.
+- Die Leitung schaltet das **Häkchen „Live-Leitung"** im Menü, nicht der Klick
+  auf das Symbol.
+
+**Warum nicht der Linksklick (Stand 27.10.2026).** Er hat es zwischendurch
+getan, und das war die Behebung eines anderen Punktes: Ohne Behandlung von
+`Activate` tat ein Linksklick gar nichts, und das sah aus wie ein Tray, der
+sich nicht schalten lässt. Der nächste Punkt kam direkt hinterher — *das Menü
+lässt sich nicht schließen*.
+
+Dazu stand hier, das sei nicht unsere Sache: StatusNotifierItem kenne keinen
+Weg, ein Menü von der Anwendung aus zu schließen. Die Technik stimmte, die
+Folgerung nicht. In derselben Leiste funktionieren **alle anderen** Programme
+so — Linksklick auf, zweiter Klick zu. Der Unterschied war, dass wir `Activate`
+selbst behandelt und das Menü damit zu einer Sache der Anwendung gemacht haben,
+statt es der Leiste zu überlassen.
+
+Jetzt setzt der Tray `ItemIsMenu` (ksni: `MENU_ON_ACTIVATE`), unter macOS und
+Windows `with_menu_on_left_click(true)`. Die Leiste öffnet das Menü also selbst
+— und schließt es deshalb auch selbst.
 
 Das **Schließen** des aufgeklappten Menüs gehört der Leiste, nicht dem Tray:
 StatusNotifierItem kennt keinen Weg, ein Menü von der Anwendung aus

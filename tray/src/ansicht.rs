@@ -400,9 +400,11 @@ mod tests {
         // null. Vor #8932 entschied `bis`, und die Leiste hätte „aus"
         // gezeigt, während AI Brain mitliest.
         let a = ansicht(
-            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+            &da(
+                r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
                     "lage":{"stand":"verbunden","seit":0,"pane":"avatar-imkr/1"},
-                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
@@ -419,9 +421,11 @@ mod tests {
         // Die Frage, die ein Mensch an eine von selbst angegangene Leitung
         // stellt, ist nicht „warum", sondern „wer sieht mit".
         let a = ansicht(
-            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+            &da(
+                r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
                     "lage":{"stand":"verbunden","seit":0,"freigaben":["avatar-1"]},
-                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
@@ -435,13 +439,19 @@ mod tests {
     #[test]
     fn mehrere_channels_stehen_alle_da() {
         let a = ansicht(
-            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+            &da(
+                r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
                     "lage":{"stand":"verbunden","seit":0,"freigaben":["avatar-1","werkstatt"]},
-                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
-        assert!(a.leitung.contains("Freigabe avatar-1, werkstatt"), "{}", a.leitung);
+        assert!(
+            a.leitung.contains("Freigabe avatar-1, werkstatt"),
+            "{}",
+            a.leitung
+        );
     }
 
     #[test]
@@ -449,9 +459,11 @@ mod tests {
         // Ein Harness vor #8932 liefert das Feld nicht. Dann soll die Zeile
         // nicht „Freigabe " mit nichts dahinter behaupten.
         let a = ansicht(
-            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+            &da(
+                r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
                     "lage":{"stand":"verbunden","seit":0},
-                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
@@ -462,9 +474,11 @@ mod tests {
     #[test]
     fn eine_automatische_leitung_vor_der_verbindung_ist_gelb_und_gefuellt() {
         let a = ansicht(
-            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+            &da(
+                r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
                     "lage":{"stand":"verbindet","seit":0},
-                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
@@ -477,14 +491,17 @@ mod tests {
         // „aus" allein liest sich wie „kommt gleich wieder". Bei einem Veto
         // kommt sie nicht wieder, und das ist der Punkt.
         let a = ansicht(
-            &da(r#"{"an":false,"bis":null,"grund":"abgeschaltet","prozess":4242,
+            &da(
+                r#"{"an":false,"bis":null,"grund":"abgeschaltet","prozess":4242,
                     "lage":{"stand":"abgeschaltet","seit":0,"grund":"von Hand ausgeschaltet"},
-                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#,
+            ),
             0,
         );
 
         assert!(
-            a.leitung.contains("aus — abgeschaltet, bis du wieder einschaltest"),
+            a.leitung
+                .contains("aus — abgeschaltet, bis du wieder einschaltest"),
             "{}",
             a.leitung
         );

@@ -32,8 +32,8 @@ use std::sync::mpsc;
 
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::ansicht::Ansicht;
 use crate::harness;
@@ -59,6 +59,8 @@ const KANTE: u32 = 32;
 #[derive(Clone, Copy)]
 enum Aktion {
     An(&'static str),
+    /// Das Häkchen: an, wenn aus — aus, wenn an.
+    Umschalten,
     Aus,
     Protokoll,
     Beenden,
@@ -69,8 +71,6 @@ enum Nachricht {
     /// Zeit, den Zustand neu zu lesen.
     Takt,
     Menue(MenuId),
-    /// Linksklick auf das Symbol.
-    Klick,
     Ende,
 }
 
@@ -80,6 +80,8 @@ fn menue(
     an: bool,
     fehler: Option<&str>,
     protokoll: bool,
+    weiss_etwas: bool,
+    aufraeumen: bool,
 ) -> (Menu, HashMap<MenuId, Aktion>) {
     let menu = Menu::new();
     let mut zuordnung = HashMap::new();
@@ -101,38 +103,37 @@ fn menue(
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
+    // Ein Häkchen, kein Knopf — und auf allen Plattformen dasselbe. Die
+    // Begründung steht in `linux.rs` und in `Kern::umschalten`: Ein Knopf
+    // „Live einschalten" sagt nicht, ob sie gerade an ist, ein Häkchen trägt
+    // Zustand und Handlung in einem.
+    let haken = CheckMenuItem::new("Live-Leitung", weiss_etwas, an, None);
+    zuordnung.insert(haken.id().clone(), Aktion::Umschalten);
+    let _ = menu.append(&haken);
+
     for (beschriftung, dauer) in DAUERN {
-        let punkt = MenuItem::new(
-            if an {
-                format!("Ab jetzt {beschriftung}")
-            } else {
-                format!("Live einschalten: {beschriftung}")
-            },
-            true,
-            None,
-        );
+        let punkt = MenuItem::new(format!("… ab jetzt {beschriftung}"), true, None);
 
         zuordnung.insert(punkt.id().clone(), Aktion::An(dauer));
         let _ = menu.append(&punkt);
     }
 
-    // Immer anklickbar — siehe `linux.rs`: Im Störfall ist genau das der
-    // Punkt, der aufräumt.
-    let aus = MenuItem::new("Live ausschalten", true, None);
-    zuordnung.insert(aus.id().clone(), Aktion::Aus);
-    let _ = menu.append(&aus);
+    // Nur im Störfall, den das Häkchen nicht abdeckt — siehe `linux.rs`.
+    if aufraeumen {
+        let aus = MenuItem::new(
+            "Leitung aufräumen (Prozess läuft ohne Schalter)",
+            true,
+            None,
+        );
+        zuordnung.insert(aus.id().clone(), Aktion::Aus);
+        let _ = menu.append(&aus);
+    }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     let log = MenuItem::new("Protokoll öffnen", protokoll, None);
     zuordnung.insert(log.id().clone(), Aktion::Protokoll);
     let _ = menu.append(&log);
-
-    let _ = menu.append(&MenuItem::new(
-        "Linksklick schaltet die Leitung",
-        false,
-        None,
-    ));
 
     let ende = MenuItem::new("Tray beenden", true, None);
     zuordnung.insert(ende.id().clone(), Aktion::Beenden);
@@ -209,20 +210,11 @@ pub fn starten() -> Result<(), String> {
         let _ = bote_menue.send_event(Nachricht::Menue(e.id));
     }));
 
-    let bote_klick = bote.clone();
-
-    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
-        // Nur der Linksklick, und nur beim Loslassen: Sonst schaltet ein
-        // einziger Klick zweimal (Down und Up).
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        } = e
-        {
-            let _ = bote_klick.send_event(Nachricht::Klick);
-        }
-    }));
+    // KEINE eigene Klickbehandlung mehr: Das Menü öffnet die Leiste selbst
+    // (`with_menu_on_left_click`), und sie schliesst es deshalb beim zweiten
+    // Klick auch selbst. Wer `Activate` selbst behandelt, macht das Menü zu
+    // einer Sache der Anwendung — und dann fehlt ihr der Weg, es wieder
+    // zuzumachen.
 
     let (signal, geweckt) = mpsc::channel();
     let bote_signal = bote.clone();
@@ -255,16 +247,25 @@ pub fn starten() -> Result<(), String> {
         match ereignis {
             Event::NewEvents(StartCause::Init) => {
                 let a = kern.ansicht();
-                let (menu, neu) = menue(&a, kern.an(), None, false);
+                let (menu, neu) = menue(
+                    &a,
+                    kern.an(),
+                    None,
+                    false,
+                    kern.weiss_etwas(),
+                    kern.aufraeumen_noetig(),
+                );
                 zuordnung = neu;
 
                 match TrayIconBuilder::new()
                     .with_tooltip(a.kurz())
                     .with_menu(Box::new(menu))
-                    // Linksklick schaltet, Rechtsklick öffnet das Menü — so
-                    // ist es unter Linux auch, und ein Tray, der sich je
-                    // Plattform anders bedienen lässt, ist zwei Trays.
-                    .with_menu_on_left_click(false)
+                    // Linksklick öffnet das Menü — das Gegenstück zu
+                    // `ItemIsMenu` unter Linux (siehe `linux.rs`). Ein Tray,
+                    // der sich je Plattform anders bedienen lässt, ist zwei
+                    // Trays; und ein Symbolklick, der etwas SCHALTET, ist in
+                    // keiner Leiste so.
+                    .with_menu_on_left_click(true)
                     .build()
                 {
                     Ok(t) => {
@@ -289,10 +290,9 @@ pub fn starten() -> Result<(), String> {
                 *lauf = ControlFlow::ExitWithCode(0);
             }
 
-            Event::UserEvent(Nachricht::Klick) => kern.umschalten(),
-
             Event::UserEvent(Nachricht::Menue(id)) => match zuordnung.get(&id) {
                 Some(Aktion::An(dauer)) => kern.einschalten(dauer),
+                Some(Aktion::Umschalten) => kern.umschalten(),
                 Some(Aktion::Aus) => kern.ausschalten(),
                 Some(Aktion::Protokoll) => kern.protokoll_oeffnen(),
                 Some(Aktion::Beenden) => kern.beenden(),
@@ -322,6 +322,8 @@ pub fn starten() -> Result<(), String> {
                         kern.an(),
                         stand.1.as_deref(),
                         kern.protokoll().is_some(),
+                        kern.weiss_etwas(),
+                        kern.aufraeumen_noetig(),
                     );
 
                     zuordnung = neu;
