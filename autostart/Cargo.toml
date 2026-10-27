@@ -1,6 +1,6 @@
 [package]
 name = "ai-brain-autostart"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Beim Anmelden starten — je Plattform anders, fuer Harness und Tray derselbe Mechanismus"
 license = "MIT"
