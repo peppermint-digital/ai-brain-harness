@@ -1190,6 +1190,63 @@ durchgereicht, und dessen „Unbekannter Befehl: tunnel" erschien **hier** — a
 hätte der Befehl auf diesem Rechner nicht existiert. Eine halbe Stunde
 Fehlersuche am falschen Ende, bis eine Marke im Code bewies, dass er läuft.
 
+## Für imkr: Nachrichten und Meldungen
+
+Zwei Befehle, die nicht für Menschen gedacht sind, sondern für imkr auf demselben
+Rechner. imkr hält keine Anmeldung bei AI Brain — die hält dieser Harness. Beide
+Antworten mit `--json` sind **Maschinenverträge**: imkr zerlegt sie, also werden sie
+unverändert durchgereicht und nicht hier neu zusammengesetzt.
+
+### `nachricht` — zwischen den imkrs verschiedener Personen (imkr #495)
+
+```bash
+ai-brain-harness nachricht kontakte [--json]          # wen dieser Rechner erreicht
+ai-brain-harness nachricht senden <person> <text> [--von A] [--ziel S/P]
+ai-brain-harness nachricht abholen [--json]           # was für diesen Rechner anliegt
+ai-brain-harness nachricht bestaetigen <nummer>       # eingereiht, kommt nicht wieder
+```
+
+`abholen --json` antwortet
+`{"nachrichten":[{"id","von_person","von","ziel","text","angelegt","abholungen"}]}`.
+
+### `meldung` — imkr-Ereignisse im gemeinsamen Posteingang (imkr #536)
+
+Wartet ein Agent auf eine Antwort, ist er fertig, abgebrochen, ist sein Konto
+erschöpft oder hat ein Kontakt geschrieben, legt imkr das in den Posteingang von
+AI Brain — **zusätzlich** zu Klingel und ntfy, nicht statt. Eine Klingel vergeht,
+eine Zeile im Posteingang bleibt stehen, bis jemand sie abhakt.
+
+```bash
+ai-brain-harness meldung senden --art <blocked|done|failed|account|message> \
+    --rechner <name> --sitzung <name> --pane <nummer> \
+    [--fenster <nummer>] [--agent <name>] [--link <url>] <titel…>
+    # Der Begleittext (woran der Agent arbeitet, seine Frage, der Fehler) kommt
+    # auf stdin; leer ist erlaubt, über 8 KB wird gekürzt.
+
+ai-brain-harness meldung gelesen [--json]      # was im Posteingang abgehakt wurde
+ai-brain-harness meldung bestaetigen <nummer>  # imkr hat das ✦ genommen
+```
+
+`gelesen --json` antwortet
+`{"gelesen":[{"id","sitzung","pane","art","rechner","abholungen"}]}`.
+
+**Der Titel steht am Schluss.** Alles, was keine Flagge und kein Flaggenwert ist,
+gehört zum Titel — eine Flagge dahinter würde von ihm verschluckt.
+
+**Warum es einen Rückweg gibt.** imkr führt sein eigenes ✦ („da war was, du hast es
+noch nicht gesehen"). Wer die Zeile im Posteingang abhakt, hat sie gesehen; ein ✦,
+das danach im Terminal stehen bleibt, wäre eine zweite Wahrheit. imkr fragt deshalb
+alle 30 Sekunden `gelesen`, nimmt das ✦ und bestätigt erst dann.
+
+**Mindestens einmal, nicht genau einmal.** Eine Zeile kommt wieder, solange sie nicht
+bestätigt ist. Dasselbe ✦ zweimal wegzunehmen kostet nichts, es einmal stehen zu
+lassen schon. Dieselbe Mechanik wie bei `nachricht`.
+
+Auf der Instanz hängen daran die Werkzeuge `report-imkr-event-tool`,
+`fetch-imkr-read-tool` und `confirm-imkr-read-tool`, die Tabelle `imkr_meldungen` und
+die Posteingangs-Art `imkr`. Abgehaktes und Bestätigtes räumt AI Brain nach 30 Tagen
+weg, Ungelesenes bleibt.
+
 ## Weitere Befehle
 
 ```bash
