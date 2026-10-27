@@ -841,14 +841,65 @@ Abriss erhalten bleiben. Ab 1 MB liegt der alte Teil als `leitung.log.1`.
 ### Der Tray
 
 `ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop (Linux,
-StatusNotifier, z. B. waybar). Es zeigt, ob die Leitung steht und welches Pane
-sie zeigt, und schaltet sie für 30 min, 2 h oder 8 h ein oder aus. Die Regeln
-bleiben im Harness: der Tray ruft nur `leitung status --json`, `an` und `aus`.
+StatusNotifier, z. B. waybar). Es zeigt **zwei** Zustände und schaltet einen
+davon. Die Regeln bleiben im Harness: der Tray ruft nur `leitung status
+--json`, `an` und `aus`.
 
 ```bash
 cargo build --release -p ai-brain-tray
 ai-brain-tray --autostart                   # beim Anmelden starten
+ai-brain-tray --pruefen                     # gibt es hier eine Leiste?
 ```
+
+#### Zwei Zustände, nicht einer
+
+| Zeile | Was sie sagt |
+|---|---|
+| `Mit AI Brain verbunden (Gerät …)` | Es liegt ein Gerätezugang vor. |
+| `Live-Leitung: an, noch 2 h` / `aus` | Der Schalter aus `leitung an`/`aus`. |
+| `Verbunden, zeigt bau/2` | Wie es der laufenden Leitung geht. |
+
+Bis zum 27.10.2026 stand dort nur `Live: aus` — und das hat wie **nicht
+verbunden** gewirkt, obwohl der Rechner an seiner Instanz hing. Zwei Zustände
+in einer Zeile zusammenzufassen spart eine Zeile und kostet die Auskunft.
+
+Die Verbindung ist der *Zugang*, nicht die Erreichbarkeit: Dass die Instanz in
+dieser Sekunde antwortet, steht dort nicht. Der Tray liest den Status alle zwei
+Sekunden, und eine HTTP-Anfrage in diesem Takt wäre Dauerlast für eine
+Auskunft, die niemand so oft braucht. Läuft die Leitung, sagt ihre `lage`
+ohnehin, ob sie steht.
+
+#### Bedienung und Symbol
+
+- **Linksklick** schaltet die Leitung (ein für 30 min, oder aus).
+- **Rechtsklick** öffnet das Menü: Dauern, Protokoll, Beenden.
+
+Der Linksklick fehlte bis zum 27.10.2026. In den meisten Leisten öffnet der
+*Rechtsklick* das Menü, der Linksklick löst `Activate` aus — ohne Handler tat
+er also nichts, und von außen sah das aus wie ein Tray, der sich nicht schalten
+und nicht beenden lässt. Ein Klick, der nichts tut, ist schlimmer als kein
+Klick: Er lässt am Programm zweifeln statt an der Bedienung.
+
+Das Symbol wird **selbst gezeichnet** und nennt keinen Theme-Symbolnamen. Mit
+`network-*` aus dem Theme kam es auf einer dunklen Leiste als dunkel auf dunkel
+heraus. Ein Theme liefert eine Form, aber keine Zusage über den Kontrast.
+Gezeichnet wird deshalb mit beiden Kontrastkanten — weißer Saum nach innen,
+dunkle Kante nach außen —, und damit braucht es kein Theme-Wissen:
+
+| | |
+|---|---|
+| grau | nicht verbunden |
+| blau | verbunden, Leitung aus |
+| grün | Leitung läuft und überträgt |
+| gelb | unterwegs |
+| rot | gestört (aufgelegt, getrennt, Harness stumm) |
+
+Gefüllt heißt Leitung an, hohl heißt aus.
+
+Den Harness sucht der Tray **neben sich selbst**, dann in `~/.local/bin`, dann
+im `PATH` (oder unter `AI_BRAIN_HARNESS`). Autostart startet ihn ohne die Shell
+des Nutzers, und dort fehlt `~/.local/bin` im `PATH` regelmäßig — er hing dann
+in der Leiste und fand sein eigenes Programm nicht.
 
 #### Er kommt mit der Installation — aber nicht überall
 
