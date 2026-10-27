@@ -1,6 +1,6 @@
 [package]
 name = "ai-brain-tray"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Tray für den AI-Brain-Harness: zeigt die Live-Leitung und schaltet sie"
 license = "MIT"
