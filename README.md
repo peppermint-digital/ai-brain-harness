@@ -954,6 +954,20 @@ Lässt sich die Antwort nicht zerlegen, wird der Auftrag **abgelehnt** statt
 ungefiltert gemeldet — was wir nicht lesen können, können wir auch nicht
 säubern.
 
+**Die Liste wird vorher gedeckelt, nicht hinterher gekürzt.** Ein Ergebnis über
+16 KB geht sonst durch dieselbe Kürzung wie eine Befehlsausgabe — und die
+behält das *Ende* mit einem Vermerk davor. Bei einer Befehlsausgabe ist das
+richtig, bei JSON ergibt es ein ungültiges Dokument, und der Agent erfährt
+nicht warum. Gemessen am 27.10.2026: 16 Sitzungen mit 10 Panes wogen kompakt
+3,3 kB; ein Rechner mit 16 *laufenden* Sitzungen à 5 Panes läge darüber.
+
+Passt es nicht, fallen die `pane_liste`n der letzten Sitzungen weg — von
+hinten, weil jede andere Wahl hieße, hier zu entscheiden, welche Sitzung
+wichtiger ist. **Jede Sitzung bleibt in der Liste** (sonst erfährt ein Agent,
+sie gäbe es nicht), die betroffenen tragen `pane_liste_fehlt: true`, und oben
+steht `gekuerzt` mit der Zahl. Ausgegeben wird kompaktes JSON: Einrückung
+kostete 70 % mehr Bytes, und die gehen von den Panes ab, die noch hineinpassen.
+
 ### Der Tray
 
 `ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop. Es

@@ -3076,6 +3076,61 @@ fn pane_gefiltert(sitzung: &str, pane: &serde_json::Value) -> serde_json::Value 
     serde_json::Value::Object(m)
 }
 
+/// Was die Sitzungsliste höchstens wiegen darf.
+///
+/// **Der Grund ist kein Geschmack, sondern ein Fehler, der sonst still
+/// passiert.** Ein Ergebnis über [`GRENZE_ERGEBNIS`] geht durch
+/// [`kuerzen`] — und das behält das ENDE und setzt einen Vermerk davor. Bei
+/// einer Befehlsausgabe ist das richtig (dort steht unten, was schiefging);
+/// bei JSON ergibt es ein **ungültiges Dokument**, und der Agent bekommt
+/// etwas, das er nicht lesen kann, ohne zu erfahren warum.
+///
+/// Gemessen am 27.10.2026: 16 Sitzungen mit 10 Panes wogen kompakt 3,3 kB.
+/// Ein Rechner mit 16 LAUFENDEN Sitzungen à 5 Panes käme auf das Fünffache
+/// und läge damit drüber. Also vorher deckeln, nicht hinterher kürzen.
+///
+/// Die Reserve ist für den Vermerk, der dann dazukommt.
+const SITZUNGEN_BUDGET: usize = GRENZE_ERGEBNIS - 512;
+
+/// Setzt das Dokument zusammen; die letzten `ohne_liste` Sitzungen ohne Panes.
+fn sitzungen_dokument(sitzungen: &[serde_json::Value], ohne_liste: usize) -> String {
+    let grenze = sitzungen.len().saturating_sub(ohne_liste);
+    let mut aus = Vec::with_capacity(sitzungen.len());
+
+    for (i, sitzung) in sitzungen.iter().enumerate() {
+        let mut m = sitzung.as_object().cloned().unwrap_or_default();
+
+        if i >= grenze {
+            m.remove("pane_liste");
+            // Ausdrücklich, nicht durch Abwesenheit: Ein fehlendes Feld sieht
+            // genauso aus wie eine Sitzung ohne Panes, und das ist eine
+            // andere Aussage.
+            m.insert("pane_liste_fehlt".into(), true.into());
+        }
+
+        aus.push(serde_json::Value::Object(m));
+    }
+
+    let mut wurzel = serde_json::Map::new();
+    wurzel.insert("sitzungen".into(), aus.into());
+
+    if ohne_liste > 0 {
+        wurzel.insert(
+            "gekuerzt".into(),
+            serde_json::json!({
+                "sitzungen_ohne_pane_liste": ohne_liste,
+                "hinweis": "Zu viele Panes für eine Antwort. Die Sitzungen stehen alle da, \
+                            bei den letzten fehlt die Pane-Liste. Die Adressen der uebrigen \
+                            gelten unveraendert.",
+            }),
+        );
+    }
+
+    // Kompakt und nicht eingerückt: Einrückung kostete bei der Messung oben
+    // 70 % mehr Bytes, und die gehen von den Panes ab, die noch hineinpassen.
+    serde_json::Value::Object(wurzel).to_string()
+}
+
 /// Projiziert die Antwort von `imkr ls --json` auf die Positivliste.
 ///
 /// Was hier nicht ausdrücklich abgeschrieben wird, verlässt den Rechner nicht.
@@ -3141,8 +3196,21 @@ pub fn sitzungen_filtern(roh: &str) -> Result<String, String> {
         sitzungen.push(serde_json::Value::Object(m));
     }
 
-    serde_json::to_string_pretty(&serde_json::json!({ "sitzungen": sitzungen }))
-        .map_err(|e| format!("Sitzungsliste nicht schreibbar: {e}"))
+    // Von hinten Pane-Listen fallen lassen, bis es passt. Von hinten und
+    // nicht nach einer Rangfolge: Jede andere Wahl hiesse, hier zu entscheiden,
+    // welche Sitzung wichtiger ist — und das weiss der Agent, nicht wir.
+    for ohne_liste in 0..=sitzungen.len() {
+        let doc = sitzungen_dokument(&sitzungen, ohne_liste);
+
+        if json_laenge(&doc) <= SITZUNGEN_BUDGET {
+            return Ok(doc);
+        }
+    }
+
+    // Selbst ohne jede Pane-Liste zu gross: dann gehen die Sitzungsnamen
+    // allein heraus. Mehr als eine Behauptung ueber die Zahl der Sitzungen
+    // bleibt nicht — aber sie ist wahr, und ungueltiges JSON waere es nicht.
+    Ok(sitzungen_dokument(&sitzungen, sitzungen.len()))
 }
 
 /// Listet die Sitzungen und meldet die Liste auf demselben Weg wie ein
@@ -3628,6 +3696,87 @@ mod tests {
         assert_eq!(panes[1]["programm"], "claude");
         assert_eq!(panes[1]["titel"], "Avatar findet imkr-Sessions");
         assert_eq!(panes[1]["fenster"], 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn sitzungen_filter_bleibt_unter_dem_deckel_und_liefert_GUELTIGES_json() {
+        // Der Fehler, den dieser Deckel verhindert: Ueber GRENZE_ERGEBNIS
+        // greift `kuerzen`, und das behaelt das ENDE mit einem Vermerk davor.
+        // Bei einer Befehlsausgabe ist das richtig; bei JSON ist es ein
+        // Dokument, das der Agent nicht lesen kann — und er erfaehrt nicht,
+        // warum.
+        let mut sitzungen = Vec::new();
+
+        for s in 0..40 {
+            let panes: Vec<String> = (0..8)
+                .map(|p| {
+                    format!(
+                        r#"{{"pane":{p},"program":"claude","workspace":{p},
+                            "dir":"ein-ziemlich-langer-verzeichnisname-{s}",
+                            "state":"working","since":1234,
+                            "meta":"opus 5 · 300k",
+                            "title":"ein Fenstertitel, der so lang ist wie echte Titel es sind {s}/{p}"}}"#
+                    )
+                })
+                .collect();
+
+            sitzungen.push(format!(
+                r#"{{"name":"sitzung-nummer-{s}","panes":8,"windows":8,
+                    "agents":{{"working":8}},"all_panes":[{}]}}"#,
+                panes.join(",")
+            ));
+        }
+
+        let roh = format!("[{}]", sitzungen.join(","));
+        let gefiltert = sitzungen_filtern(&roh).expect("filtern");
+
+        // 1 ─ Es passt unter die Grenze, die `kuerzen` sonst anwendet.
+        assert!(
+            json_laenge(&gefiltert) <= GRENZE_ERGEBNIS,
+            "{} Zeichen",
+            json_laenge(&gefiltert)
+        );
+
+        // 2 ─ Und es ist gueltiges JSON. Das ist der eigentliche Punkt.
+        let v: serde_json::Value = serde_json::from_str(&gefiltert).expect("gueltiges JSON");
+
+        // 3 ─ JEDE Sitzung steht da, auch die ohne Pane-Liste. Ein Agent, der
+        //     nach einer Sitzung sucht, soll nicht erfahren, sie gaebe es nicht.
+        assert_eq!(v["sitzungen"].as_array().unwrap().len(), 40);
+
+        // 4 ─ Und es sagt, was fehlt — ausdruecklich, nicht durch Abwesenheit.
+        let fehlt = v["gekuerzt"]["sitzungen_ohne_pane_liste"].as_u64().unwrap();
+        assert!(fehlt > 0, "bei dieser Menge muss gekuerzt werden");
+        assert!(fehlt < 40, "nicht alles, es passt ja etwas");
+
+        let ohne: Vec<_> = v["sitzungen"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["pane_liste_fehlt"].as_bool() == Some(true))
+            .collect();
+
+        assert_eq!(ohne.len() as u64, fehlt);
+        // Die weggelassenen stehen am ENDE, nicht verstreut: Wer hier eine
+        // Rangfolge einbaut, entscheidet, welche Sitzung wichtiger ist.
+        assert!(ohne[0]["pane_liste"].is_null());
+        assert!(!v["sitzungen"][0]["pane_liste"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn eine_kleine_sitzungsliste_wird_nicht_angefasst() {
+        // Gegenprobe: Der Deckel darf im Normalfall nichts tun. Sonst faellt
+        // nicht auf, wenn er zu scharf eingestellt ist.
+        let roh = r#"[{"name":"imkr","panes":1,"windows":1,
+            "all_panes":[{"pane":0,"program":"zsh","workspace":1,"dir":"x","state":""}]}]"#;
+
+        let v: serde_json::Value =
+            serde_json::from_str(&sitzungen_filtern(roh).unwrap()).unwrap();
+
+        assert!(v.get("gekuerzt").is_none(), "nichts zu kuerzen");
+        assert!(v["sitzungen"][0].get("pane_liste_fehlt").is_none());
+        assert_eq!(v["sitzungen"][0]["pane_liste"][0]["adresse"], "imkr/0");
     }
 
     #[test]
