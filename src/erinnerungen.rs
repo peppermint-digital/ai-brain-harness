@@ -48,17 +48,54 @@ struct Antwort {
 /// Die Regel ist seine, nicht unsere: der absolute Pfad mit `/` zu `-`. Sie
 /// hier nachzubauen ist unschoen, aber die Alternative waere, Claude Code zu
 /// bitten, uns seinen Ort zu verraten — und das kann es nicht.
+///
+/// ## Warum hier `CLAUDE_CONFIG_DIR` gilt — und bei der MCP-Datei nicht
+///
+/// Der Unterschied sieht nach Inkonsequenz aus und ist keine:
+/// {@link crate::config::claude_config_path} nimmt bewusst **immer**
+/// `~/.claude.json`, weil `imkr account sync` die `mcpServers`-Struktur eines
+/// Kontos bei jedem Abgleich durch die aus `~/.claude.json` ERSETZT — ein
+/// Eintrag, den nur das Konto kennt, waere still wieder weg. Das Gedaechtnis
+/// fasst dieser Verteiler nicht an; fuer es gilt schlicht, wo Claude Code
+/// nachsieht, und das ist `CLAUDE_CONFIG_DIR`, sonst `~/.claude`.
+///
+/// ## Und warum beides auf Bastians Rechnern dieselben Dateien sind (#1123)
+///
+/// Bug #1123 vermutete, die „eigentlichen" Memories lagen in den
+/// imkr-Kontoordnern und nicht im Standardordner. Gemessen am 27.10.2026 auf
+/// codingmachine:
+///
+/// ```text
+/// ~/.local/state/imkr/accounts/claude/henneberg/projects
+///   -> /home/codingmachine/.claude/projects
+/// ```
+///
+/// imkr verlinkt beim Anlegen eines Kontos **alles** aus `~/.claude` in den
+/// Kontoordner und behaelt nur die kontoeigenen Dateien (`.claude.json`,
+/// `.credentials.json`) — `link_shared` in `imkr/src/account.rs`, und sein
+/// eigener Test prueft `dir.join("projects").is_symlink()`. Die Eintraege der
+/// Konten SIND also dieselben Dateien, Zahl fuer Zahl gleich (177/177).
+///
+/// Der Standardordner war damit nie falsch. `CLAUDE_CONFIG_DIR` zu beachten
+/// ist trotzdem richtig: Auf einem Rechner ohne imkr kann die Variable auf
+/// einen wirklich eigenen Ordner zeigen, und dann liegt das Gedaechtnis dort.
 pub fn gedaechtnis_pfad(verzeichnis: &Path) -> Option<PathBuf> {
-    let heimat = std::env::var("HOME").ok()?;
+    let ordner = crate::konto::konfigurationsordner(&BTreeMap::new())?;
+
+    Some(gedaechtnis_pfad_in(Path::new(&ordner), verzeichnis))
+}
+
+/// Der reine Teil von {@link gedaechtnis_pfad}: Ordner plus Claudes Regel.
+///
+/// Eigene Funktion, damit die Regel ohne Umgebungsvariablen pruefbar ist.
+/// Rust laesst Tests im selben Prozess nebenlaeufig laufen, und `HOME` oder
+/// `CLAUDE_CONFIG_DIR` gehoeren dem ganzen Prozess — ein Test, der sie setzt,
+/// zieht sie einem anderen unter den Fuessen weg (`verbrauch` setzt
+/// `CLAUDE_CONFIG_DIR` in seinen Tests).
+fn gedaechtnis_pfad_in(ordner: &Path, verzeichnis: &Path) -> PathBuf {
     let schluessel = verzeichnis.to_string_lossy().replace('/', "-");
 
-    Some(
-        Path::new(&heimat)
-            .join(".claude")
-            .join("projects")
-            .join(schluessel)
-            .join("memory"),
-    )
+    ordner.join("projects").join(schluessel).join("memory")
 }
 
 /// Art und Beschreibung aus dem Vorspann — nur fuer die Anzeige.
@@ -210,6 +247,91 @@ fn schicken(
 /// und was uebersehen wird, braucht man nicht zu drucken. Stillschweigen gilt
 /// nur fuer den Normalfall; Konflikte und Fehlschlaege stehen weiterhin da.
 pub fn abgleichen(args: &[String]) -> Result<(), String> {
+    let (bilanz, _) = abgleichen_mit_bilanz(args)?;
+
+    if bilanz.gescheitert > 0 {
+        return Err(format!(
+            "{} von {} Einträgen sind nicht angekommen — siehe oben.",
+            bilanz.gescheitert,
+            bilanz.gescheitert + bilanz.zurueckgegeben
+        ));
+    }
+
+    Ok(())
+}
+
+/// Was ein Abgleich bewegt hat — gemessen, nicht vorgenommen (#1123).
+///
+/// **Warum es diese Struktur gibt.** Bis v0.5.0 gab `abgleichen` nur
+/// `Result<(), String>` zurueck, und der Einrichtungsassistent machte daraus
+/// die Zeile „Erinnerungen: abgeglichen". Bei einem Trockenlauf stand dort
+/// also „abgeglichen", obwohl direkt darueber „Nichts geschrieben" gedruckt
+/// worden war. `Ok(())` heisst „ohne Fehler gelaufen" und nicht „etwas
+/// bewegt" — wer das eine fuer das andere nimmt, hat eine Zusammenfassung,
+/// die ihren Vorsatz wiedergibt statt eines Ergebnisses.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Bilanz {
+    /// Wurde wirklich geschrieben (`--apply`) oder nur angesehen?
+    pub angewendet: bool,
+    /// Von AI Brain hierher geschrieben.
+    pub geholt: usize,
+    /// Von hier an AI Brain uebergeben.
+    pub zurueckgegeben: usize,
+    /// Was von AI Brain kaeme — auch im Trockenlauf gezaehlt.
+    pub offen_hier: usize,
+    /// Was hinginge — auch im Trockenlauf gezaehlt.
+    pub offen_dort: usize,
+    /// Beidseitig geaendert, also nicht angefasst.
+    pub konflikte: usize,
+    /// Eintraege, die nicht durchgingen.
+    pub gescheitert: usize,
+}
+
+/// Die Bilanz als eine Zeile fuer eine Uebersicht (#1123).
+///
+/// Jede Variante nennt Zahlen, und die Variante „nur angesehen" nennt den
+/// Befehl, der es anwendet — ein Hinweis ohne Befehl laesst jemanden suchen,
+/// was er gerade gelesen hat.
+pub fn bilanz_wort(b: &Bilanz, verzeichnis: &Path) -> String {
+    if !b.angewendet {
+        return format!(
+            "nur angesehen: {} kämen von AI Brain, {} gingen hin — \
+             `ai-brain-harness erinnerungen --apply --verzeichnis {}`",
+            b.offen_hier,
+            b.offen_dort,
+            verzeichnis.display()
+        );
+    }
+
+    let mut satz = if b.geholt + b.zurueckgegeben == 0 {
+        "nichts zu übertragen, beide Seiten gleich".to_string()
+    } else {
+        format!("{} geholt, {} zurückgegeben", b.geholt, b.zurueckgegeben)
+    };
+
+    if b.gescheitert > 0 {
+        satz.push_str(&format!(
+            ", {} nicht angekommen (siehe oben)",
+            b.gescheitert
+        ));
+    }
+
+    if b.konflikte > 0 {
+        satz.push_str(&format!(
+            ", {} beidseitig geändert und nicht angefasst",
+            b.konflikte
+        ));
+    }
+
+    satz
+}
+
+/// Wie {@link abgleichen}, gibt aber die Bilanz und das Verzeichnis zurueck.
+///
+/// Fuer den Einrichtungsassistenten: Er braucht Zahlen fuer seine
+/// Zusammenfassung, und einen Fehlschlag einzelner Eintraege soll er melden
+/// statt daran abzubrechen — die uebrigen Schritte sind davon unberuehrt.
+pub fn abgleichen_mit_bilanz(args: &[String]) -> Result<(Bilanz, PathBuf), String> {
     let wert = |n: &str| -> Option<String> {
         args.iter()
             .position(|a| a == n)
@@ -333,10 +455,26 @@ pub fn abgleichen(args: &[String]) -> Result<(), String> {
     if !anwenden {
         if !still {
             println!();
-            println!("Nichts geschrieben. Mit --apply anwenden.");
+            // Mit dem Verzeichnis, nicht nur mit dem Schalter: Der Ort des
+            // Gedaechtnisses haengt am Arbeitsverzeichnis, und ein Befehl zum
+            // Abschreiben, der nur woanders getippt wirkt, ist eine Falle.
+            println!("Nichts geschrieben. Anwenden:");
+            println!(
+                "  ai-brain-harness erinnerungen --apply --verzeichnis {}",
+                verzeichnis.display()
+            );
         }
 
-        return Ok(());
+        return Ok((
+            Bilanz {
+                angewendet: false,
+                offen_hier: neu_hier.len(),
+                offen_dort: neu_dort.len(),
+                konflikte: konflikt.len(),
+                ..Bilanz::default()
+            },
+            verzeichnis,
+        ));
     }
 
     let mut gescheitert: Vec<(String, String)> = Vec::new();
@@ -443,30 +581,139 @@ pub fn abgleichen(args: &[String]) -> Result<(), String> {
         for (name, grund) in &gescheitert {
             println!("  - {name}: {grund}");
         }
-
-        return Err(format!(
-            "{} von {} Einträgen sind nicht angekommen — siehe oben.",
-            gescheitert.len(),
-            neu_dort.len()
-        ));
     }
 
-    Ok(())
+    Ok((
+        Bilanz {
+            angewendet: true,
+            geholt: neu_hier.len(),
+            zurueckgegeben: zurueck,
+            offen_hier: neu_hier.len(),
+            offen_dort: neu_dort.len(),
+            // Mit `--hier-gewinnt`/`--dort-gewinnt` sind sie entschieden und
+            // oben mitgezaehlt; nur die unangetasteten gehoeren in die Zeile.
+            konflikte: if hier_gewinnt || dort_gewinnt {
+                0
+            } else {
+                konflikt.len()
+            },
+            gescheitert: gescheitert.len(),
+        },
+        verzeichnis,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{gedaechtnis_pfad, vorspann};
+    use super::{bilanz_wort, gedaechtnis_pfad_in, vorspann, Bilanz};
+    use std::collections::BTreeMap;
     use std::path::Path;
 
+    /// Ohne Umgebungsvariablen: Die Regel ist eine Rechnung, kein Zustand.
     #[test]
     fn der_ort_folgt_claudes_regel() {
-        std::env::set_var("HOME", "/home/x");
+        assert_eq!(
+            gedaechtnis_pfad_in(
+                Path::new("/home/x/.claude"),
+                Path::new("/home/x/Development/ai-brain")
+            ),
+            Path::new("/home/x/.claude/projects/-home-x-Development-ai-brain/memory").to_path_buf()
+        );
+    }
+
+    /// Der Nebenbefund aus #1123: Steht `CLAUDE_CONFIG_DIR` auf ein
+    /// imkr-Konto, liegt das Gedaechtnis unter DESSEN `projects/` — auf
+    /// Bastians Rechnern ein Symlink auf `~/.claude/projects`, also dieselben
+    /// Dateien, aber die Rechnung muss der Variable folgen.
+    #[test]
+    fn ein_kontoordner_wird_beachtet() {
+        let konto = "/home/x/.local/state/imkr/accounts/claude/henneberg";
+
+        let umgebung: BTreeMap<String, String> =
+            [("CLAUDE_CONFIG_DIR".to_string(), konto.to_string())]
+                .into_iter()
+                .collect();
+
+        let ordner = crate::konto::konfigurationsordner(&umgebung).unwrap();
 
         assert_eq!(
-            gedaechtnis_pfad(Path::new("/home/x/Development/ai-brain")),
-            Some(Path::new("/home/x/.claude/projects/-home-x-Development-ai-brain/memory").to_path_buf())
+            gedaechtnis_pfad_in(Path::new(&ordner), Path::new("/home/x/Development/imkr")),
+            Path::new(konto)
+                .join("projects")
+                .join("-home-x-Development-imkr")
+                .join("memory")
         );
+    }
+
+    /// Der Kern von #1123: Ein Trockenlauf darf nicht „abgeglichen" heissen.
+    #[test]
+    fn ein_trockenlauf_sagt_es_und_nennt_den_befehl() {
+        let b = Bilanz {
+            angewendet: false,
+            offen_hier: 94,
+            offen_dort: 7,
+            ..Bilanz::default()
+        };
+
+        let zeile = bilanz_wort(&b, Path::new("/home/x/Development/imkr"));
+
+        assert!(zeile.starts_with("nur angesehen"), "{zeile}");
+        assert!(zeile.contains("94"), "{zeile}");
+        assert!(zeile.contains("7"), "{zeile}");
+        // Ein Hinweis ohne Befehl laesst suchen — und der Ort gehoert dazu,
+        // weil das Gedaechtnis am Arbeitsverzeichnis haengt.
+        assert!(zeile.contains("--apply"), "{zeile}");
+        assert!(zeile.contains("/home/x/Development/imkr"), "{zeile}");
+        assert!(!zeile.contains("abgeglichen"), "{zeile}");
+    }
+
+    #[test]
+    fn ein_angewendeter_lauf_nennt_die_zahlen() {
+        let b = Bilanz {
+            angewendet: true,
+            geholt: 94,
+            zurueckgegeben: 7,
+            ..Bilanz::default()
+        };
+
+        assert_eq!(
+            bilanz_wort(&b, Path::new("/egal")),
+            "94 geholt, 7 zurückgegeben"
+        );
+    }
+
+    #[test]
+    fn gleichstand_wird_nicht_als_arbeit_ausgegeben() {
+        let b = Bilanz {
+            angewendet: true,
+            ..Bilanz::default()
+        };
+
+        assert_eq!(
+            bilanz_wort(&b, Path::new("/egal")),
+            "nichts zu übertragen, beide Seiten gleich"
+        );
+    }
+
+    /// Beides gehoert in die Zeile: Was liegen blieb, und was nicht ankam.
+    /// Eine Zusammenfassung, die nur das Gelungene nennt, ist die Anzeige aus
+    /// #1123 in neuer Form.
+    #[test]
+    fn konflikte_und_fehlschlaege_stehen_in_der_zeile() {
+        let b = Bilanz {
+            angewendet: true,
+            geholt: 3,
+            zurueckgegeben: 1,
+            konflikte: 2,
+            gescheitert: 1,
+            ..Bilanz::default()
+        };
+
+        let zeile = bilanz_wort(&b, Path::new("/egal"));
+
+        assert!(zeile.contains("3 geholt, 1 zurückgegeben"), "{zeile}");
+        assert!(zeile.contains("1 nicht angekommen"), "{zeile}");
+        assert!(zeile.contains("2 beidseitig geändert"), "{zeile}");
     }
 
     #[test]

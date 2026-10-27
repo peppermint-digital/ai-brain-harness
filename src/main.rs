@@ -207,13 +207,16 @@ fn configure_tools() -> Result<(), String> {
         println!("              alter Eintrag „{schluessel}“ entfernt (zeigte auf eine frühere Fassung)");
     }
 
+    // Nachgelesen statt behauptet (#1123): Beide Werkzeuge ersetzen einen
+    // vorhandenen Eintrag stillschweigend, und „angelegt" war beim zweiten
+    // Lauf schlicht falsch.
     match config::write_codex_config()? {
-        Some(_) => println!("Codex       : Eintrag „ai-brain“ angelegt"),
+        Some(stand) => println!("Codex       : {}", stand.wort()),
         None => println!("Codex       : nicht installiert, übersprungen"),
     }
 
     match config::write_pi_config()? {
-        Some(_) => println!("pi          : Eintrag „ai-brain“ angelegt"),
+        Some(stand) => println!("pi          : {}", stand.wort()),
         None => println!("pi          : nicht installiert, übersprungen"),
     }
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Connection {
@@ -387,6 +387,112 @@ pub fn claude_hat_eintrag() -> bool {
         .unwrap_or(false)
 }
 
+/// Was ein Schreibversuch an einem Werkzeug ausgerichtet hat (#1123).
+///
+/// **Warum es dafuer eine Unterscheidung braucht.** Bis v0.5.0 meldeten Codex
+/// und `pi` bei JEDEM Lauf „Eintrag „ai-brain" angelegt" — auch beim zweiten,
+/// dritten, zehnten. Beide Werkzeuge ersetzen einen vorhandenen Eintrag
+/// stillschweigend, und die Zeile gab den Vorsatz wieder statt des Ergebnisses.
+/// Gefunden beim ersten echten Lauf auf Bastians Rechnern (Bug #1123).
+///
+/// Seitdem wird vorher nachgesehen. Steht der Eintrag schon genau so da, wird
+/// gar nicht geschrieben: Ein Einrichtungsbefehl, den man zweimal aufruft,
+/// soll beim zweiten Mal nichts tun und das auch sagen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eintragsstand {
+    /// Stand schon genau so da — nichts geschrieben.
+    Schon,
+    /// Es gab keinen; jetzt steht er da.
+    Angelegt,
+    /// Es gab einen, aber er zeigte woanders hin.
+    Erneuert,
+    /// Geschrieben und danach nicht wiedergefunden. Das ist ein Befund, kein
+    /// Erfolg — die Zeile sagt es, statt „eingetragen" zu behaupten.
+    Verschwunden,
+}
+
+impl Eintragsstand {
+    /// Ein ganzer Satz fuer die Zeile beim Schritt.
+    pub fn wort(self) -> &'static str {
+        match self {
+            Eintragsstand::Schon => "Eintrag „ai-brain“ stand schon drin",
+            Eintragsstand::Angelegt => "Eintrag „ai-brain“ angelegt",
+            Eintragsstand::Erneuert => "Eintrag „ai-brain“ erneuert (zeigte vorher woanders hin)",
+            Eintragsstand::Verschwunden => {
+                "geschrieben, aber nicht wiedergefunden — bitte nachsehen"
+            }
+        }
+    }
+
+    /// Dasselbe in Kurzform, fuer eine Uebersichtszeile.
+    pub fn kurz(self) -> &'static str {
+        match self {
+            Eintragsstand::Schon => "schon drin",
+            Eintragsstand::Angelegt => "eingetragen",
+            Eintragsstand::Erneuert => "erneuert",
+            Eintragsstand::Verschwunden => "geschrieben, aber nicht wiedergefunden",
+        }
+    }
+}
+
+/// Der eigene Programmpfad, so wie er in einen MCP-Eintrag kommt.
+fn eigener_pfad() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("Eigener Programmpfad nicht ermittelbar: {e}"))
+}
+
+/// Zeigt der Eintrag „ai-brain" in dieser `mcpServers`-Datei genau auf uns?
+///
+/// `None` heisst „es gibt keinen" — das ist etwas anderes als „es gibt einen,
+/// der woanders hinzeigt", und nur mit beidem auseinander laesst sich
+/// „angelegt" von „erneuert" unterscheiden.
+///
+/// Verglichen wird der **ganze** Pfad, nicht nur der Dateiname wie in
+/// {@link ist_unser_programm}: Die Frage ist hier nicht „gehoert der uns",
+/// sondern „muss ich schreiben". Ein Eintrag auf eine frueher installierte
+/// Fassung an einem anderen Ort gehoert uns und ist trotzdem falsch.
+fn mcp_json_zeigt_auf(pfad: &Path, unser: &str) -> Option<bool> {
+    let roh = fs::read_to_string(pfad).ok()?;
+    let wert: serde_json::Value = serde_json::from_str(&roh).ok()?;
+    let eintrag = wert.get("mcpServers")?.get("ai-brain")?;
+
+    Some(befehl_zeigt_auf(eintrag, unser))
+}
+
+/// Dieselbe Frage fuer einen einzelnen Eintrag, egal woher er kommt.
+///
+/// Die Argumente zaehlen mit: Ein Eintrag auf das richtige Programm ohne
+/// `mcp` startet keinen Server, sieht in der Datei aber richtig aus.
+fn befehl_zeigt_auf(eintrag: &serde_json::Value, unser: &str) -> bool {
+    let befehl = eintrag.get("command").and_then(|c| c.as_str());
+
+    let args: Vec<&str> = eintrag
+        .get("args")
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|w| w.as_str()).collect())
+        .unwrap_or_default();
+
+    befehl == Some(unser) && args == ["mcp"]
+}
+
+/// Steht unser Eintrag in Claude Codes Konfiguration schon genau so da?
+///
+/// Fuer die Wortwahl des Einrichtungsassistenten: Geschrieben wird dort
+/// weiterhin in jedem Fall (das Schreiben raeumt auch alte Schluessel weg),
+/// aber „eingetragen" und „unveraendert" sind zwei verschiedene Auskuenfte.
+pub fn claude_eintrag_genau() -> bool {
+    let Ok(pfad) = claude_config_path() else {
+        return false;
+    };
+
+    let Ok(unser) = eigener_pfad() else {
+        return false;
+    };
+
+    mcp_json_zeigt_auf(&pfad, &unser).unwrap_or(false)
+}
+
 // ----------------------------------------------------------------- codex ----
 
 /// Traegt den MCP-Server in Codex ein — ueber dessen eigenes Werkzeug.
@@ -398,15 +504,21 @@ pub fn claude_hat_eintrag() -> bool {
 ///
 /// Fehlt Codex auf dem Rechner, ist das kein Fehler — dann gibt es nichts
 /// einzutragen.
-pub fn write_codex_config() -> Result<Option<String>, String> {
+pub fn write_codex_config() -> Result<Option<Eintragsstand>, String> {
     if which("codex").is_none() {
         return Ok(None);
     }
 
-    let executable = std::env::current_exe()
-        .map_err(|e| format!("Eigener Programmpfad nicht ermittelbar: {e}"))?;
+    let pfad = eigener_pfad()?;
+    let vorher = codex_zeigt_auf(&pfad);
 
-    let pfad = executable.to_string_lossy().to_string();
+    // Steht er schon genau so da, wird nicht geschrieben (#1123). Das ist
+    // nicht nur Hoeflichkeit gegenueber der Datei: `codex mcp remove` + `add`
+    // raeumt den Eintrag kurz weg, und ein Lauf, der nichts aendern soll,
+    // soll auch kein Fenster oeffnen, in dem er fehlt.
+    if vorher == Some(true) {
+        return Ok(Some(Eintragsstand::Schon));
+    }
 
     // Ein vorhandener Eintrag laesst sich nicht ueberschreiben — erst weg,
     // dann neu. Schlaegt das Entfernen fehl, war keiner da; das ist der
@@ -426,7 +538,51 @@ pub fn write_codex_config() -> Result<Option<String>, String> {
         return Err(format!("codex mcp add schlug fehl: {}", fehler.trim()));
     }
 
-    Ok(Some("codex".to_string()))
+    Ok(Some(nachgelesen(vorher, codex_zeigt_auf(&pfad))))
+}
+
+/// Zeigt Codex' Eintrag „ai-brain" genau auf uns? `None` = es gibt keinen.
+///
+/// **Gefragt wird Codex selbst, nicht seine `config.toml`.** Das Format dort
+/// gehoert ihm (`[mcp_servers.ai-brain]`, dazu `[features]` und
+/// `[projects."…"]`), und `codex mcp list --json` ist die Auskunft, die er
+/// dafuer anbietet — sie liest nur und ist sofort da.
+fn codex_zeigt_auf(unser: &str) -> Option<bool> {
+    let aus = std::process::Command::new("codex")
+        .args(["mcp", "list", "--json"])
+        .output()
+        .ok()?;
+
+    if !aus.status.success() {
+        return None;
+    }
+
+    let liste: Vec<serde_json::Value> = serde_json::from_slice(&aus.stdout).ok()?;
+
+    let eintrag = liste
+        .iter()
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("ai-brain"))?;
+
+    // Codex haengt den Befehl unter `transport` ein, nicht an die Wurzel.
+    let transport = eintrag.get("transport")?;
+
+    Some(befehl_zeigt_auf(transport, unser))
+}
+
+/// Aus Vorher und Nachher einen Stand machen — fuer jedes Werkzeug gleich.
+///
+/// Die Reihenfolge ist wichtig: Erst wird geprueft, ob es jetzt stimmt. Eine
+/// Zeile „angelegt" nach einem Schreibversuch, der nicht angekommen ist, ist
+/// genau der Fehler, um den es in #1123 geht.
+fn nachgelesen(vorher: Option<bool>, nachher: Option<bool>) -> Eintragsstand {
+    if nachher != Some(true) {
+        return Eintragsstand::Verschwunden;
+    }
+
+    match vorher {
+        None => Eintragsstand::Angelegt,
+        _ => Eintragsstand::Erneuert,
+    }
 }
 
 // -------------------------------------------------------------------- pi ----
@@ -439,15 +595,18 @@ pub fn write_codex_config() -> Result<Option<String>, String> {
 /// eines Formats, das ihm nicht gehoert.
 ///
 /// Fehlt `pi`, ist das kein Fehler, sondern der Normalfall.
-pub fn write_pi_config() -> Result<Option<String>, String> {
+pub fn write_pi_config() -> Result<Option<Eintragsstand>, String> {
     if which("pi").is_none() {
         return Ok(None);
     }
 
-    let executable = std::env::current_exe()
-        .map_err(|e| format!("Eigener Programmpfad nicht ermittelbar: {e}"))?;
+    let pfad = eigener_pfad()?;
+    let datei = pi_mcp_pfad()?;
+    let vorher = mcp_json_zeigt_auf(&datei, &pfad);
 
-    let pfad = executable.to_string_lossy().to_string();
+    if vorher == Some(true) {
+        return Ok(Some(Eintragsstand::Schon));
+    }
 
     // `add` ersetzt laut eigener Hilfe einen vorhandenen Eintrag („Add or
     // replace a server in mcp.json"), ein `remove` davor ist also nicht
@@ -463,7 +622,23 @@ pub fn write_pi_config() -> Result<Option<String>, String> {
         return Err(format!("pi mcp add schlug fehl: {}", fehler.trim()));
     }
 
-    Ok(Some("pi".to_string()))
+    Ok(Some(nachgelesen(
+        vorher,
+        mcp_json_zeigt_auf(&datei, &pfad),
+    )))
+}
+
+/// Wo `pi` seine MCP-Server fuehrt.
+///
+/// Aus seiner eigenen Hilfe: „Reads ~/.pi/agent/mcp.json and, in trusted
+/// projects, .pi/mcp.json." Nur die globale Datei zaehlt hier — die
+/// projektlokale gehoert dem Projekt, und wir richten den Rechner ein.
+///
+/// Gemessen am 27.10.2026 in einem Schein-HOME: Die Datei hat dieselbe Form
+/// wie `~/.claude.json` (`{"mcpServers": {"<name>": {"command", "args"}}}`),
+/// deshalb liest sie derselbe Helfer.
+fn pi_mcp_pfad() -> Result<PathBuf, String> {
+    Ok(heimat()?.join(".pi").join("agent").join("mcp.json"))
 }
 
 // ------------------------------------------------------------ imkr-Konten ----
@@ -926,5 +1101,97 @@ mod umbenennung_tests {
 
         assert!(alte_eintraege_raeumen(&mut s).is_empty());
         assert_eq!(s.len(), 2);
+    }
+}
+
+/// Die Pruefungen um {@link Eintragsstand} — ohne echte Werkzeuge (#1123).
+///
+/// Bewusst an den reinen Funktionen und einer Attrappen-Datei: Was geprueft
+/// werden muss, ist die ENTSCHEIDUNG („schon drin" gegen „angelegt"), nicht
+/// dass `codex` oder `pi` laufen. Ein Test, der die echten Werkzeuge aufruft,
+/// schreibt in die Konfiguration des Rechners, auf dem er laeuft — genau der
+/// Fehler aus dem Wiki-Artikel „Die Isolation fallen lassen, um besser zu
+/// messen".
+#[cfg(test)]
+mod eintraege {
+    use super::*;
+
+    #[test]
+    fn nur_pfad_und_argumente_zusammen_zeigen_auf_uns() {
+        let unser = "/home/x/.local/bin/ai-brain-harness";
+
+        let richtig = serde_json::json!({"command": unser, "args": ["mcp"]});
+        assert!(befehl_zeigt_auf(&richtig, unser));
+
+        // Richtiges Programm, aber ohne `mcp`: startet keinen Server und
+        // sieht in der Datei trotzdem richtig aus.
+        let ohne = serde_json::json!({"command": unser, "args": []});
+        assert!(!befehl_zeigt_auf(&ohne, unser));
+
+        // Eine frueher installierte Fassung an einem anderen Ort gehoert uns
+        // und ist trotzdem falsch — deshalb der ganze Pfad, nicht der Name.
+        let woanders =
+            serde_json::json!({"command": "/usr/local/bin/ai-brain-cli", "args": ["mcp"]});
+        assert!(!befehl_zeigt_auf(&woanders, unser));
+
+        let fremd = serde_json::json!({"command": "npx", "args": ["mcp"]});
+        assert!(!befehl_zeigt_auf(&fremd, unser));
+    }
+
+    #[test]
+    fn aus_vorher_und_nachher_wird_der_stand() {
+        use Eintragsstand::*;
+
+        // Es gab keinen → angelegt.
+        assert_eq!(nachgelesen(None, Some(true)), Angelegt);
+        // Es gab einen, der woanders hinzeigte → erneuert.
+        assert_eq!(nachgelesen(Some(false), Some(true)), Erneuert);
+        // Geschrieben und nicht wiedergefunden ist kein Erfolg. Das ist der
+        // Kern von #1123: lieber „bitte nachsehen" als „angelegt".
+        assert_eq!(nachgelesen(None, None), Verschwunden);
+        assert_eq!(nachgelesen(Some(false), Some(false)), Verschwunden);
+    }
+
+    /// `None` und `Some(false)` sind zwei verschiedene Auskuenfte: „es gibt
+    /// keinen" gegen „es gibt einen, der woanders hinzeigt". Ohne diesen
+    /// Unterschied gaebe es kein „erneuert".
+    #[test]
+    fn eine_mcp_json_wird_dreifach_unterschieden() {
+        let unser = "/home/x/.local/bin/ai-brain-harness";
+        let ordner = std::env::temp_dir().join(format!(
+            "ai-brain-harness-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        fs::create_dir_all(&ordner).unwrap();
+
+        let datei = ordner.join("mcp.json");
+
+        // Gar keine Datei.
+        assert_eq!(mcp_json_zeigt_auf(&datei, unser), None);
+
+        // Datei ohne unseren Eintrag.
+        fs::write(&datei, r#"{"mcpServers":{"playwright":{"command":"npx"}}}"#).unwrap();
+        assert_eq!(mcp_json_zeigt_auf(&datei, unser), None);
+
+        // Unser Eintrag, aber auf eine andere Fassung.
+        fs::write(
+            &datei,
+            r#"{"mcpServers":{"ai-brain":{"command":"/alt/ai-brain-cli","args":["mcp"]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(mcp_json_zeigt_auf(&datei, unser), Some(false));
+
+        // Genau so, wie wir ihn schreiben — das ist die Form, die `pi` am
+        // 27.10.2026 in einem Schein-HOME angelegt hat.
+        fs::write(
+            &datei,
+            format!(r#"{{"mcpServers":{{"ai-brain":{{"command":"{unser}","args":["mcp"]}}}}}}"#),
+        )
+        .unwrap();
+        assert_eq!(mcp_json_zeigt_auf(&datei, unser), Some(true));
+
+        let _ = fs::remove_dir_all(&ordner);
     }
 }

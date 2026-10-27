@@ -227,7 +227,7 @@ pub fn connect(args: &[String]) -> Result<(), String> {
                 // selbst — besser, als die config.toml von Hand zu schreiben.
                 // Fehlt Codex, ist das kein Fehler, sondern der Normalfall.
                 match config::write_codex_config() {
-                    Ok(Some(_)) => println!("  Codex          : Eintrag „ai-brain“ angelegt"),
+                    Ok(Some(stand)) => println!("  Codex          : {}", stand.wort()),
                     Ok(None) => {}
                     Err(err) => eprintln!("  Codex          : nicht eingetragen ({err})"),
                 }

@@ -45,7 +45,7 @@ Schritte:
   1 Verbinden        Geraetecode holen, Browser oeffnen, bestaetigen lassen
   2 Abgleichen       Skills, Agents und gewaehlte MCP-Server holen
   3 Werkzeuge        MCP-Eintrag in Claude Code, Codex, pi und die imkr-Konten
-  4 Erinnerungen     das Gedaechtnis einmal abgleichen
+  4 Erinnerungen     das Gedaechtnis abgleichen und anwenden
   5 Leitung, Leiste  Dienst und Tray anbieten
 
 Optionen:
@@ -58,6 +58,9 @@ Optionen:
 
 Schon verbunden? Dann wird Schritt 1 uebersprungen — ein zweiter Lauf legte
 sonst einen ZWEITEN Geraetezugang an.
+
+Schritt 4 schreibt, ueberschreibt aber nichts: Was hier und dort seit dem
+letzten Abgleich beides geaendert wurde, bleibt liegen, geloescht wird nie.
 ";
 
 /// Was der Assistent am Ende berichtet. Jedes Feld ist eine Messung.
@@ -158,10 +161,7 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
     }
 
     schritt(4, "Erinnerungen");
-    bericht.erinnerungen = match erinnerungen::abgleichen(&[]) {
-        Ok(()) => "abgeglichen".to_string(),
-        Err(grund) => format!("nicht abgeglichen: {}", kurz(&grund)),
-    };
+    bericht.erinnerungen = erinnerungen_abgleichen();
 
     schritt(5, "Leitung und Leiste");
     leitung_und_leiste(&wunsch, &mut bericht);
@@ -258,6 +258,11 @@ fn abgleichen(bericht: &mut Bericht) {
 /// Schritt 3. Die Reihenfolge ist nicht beliebig: `imkr account sync` verteilt
 /// AUS `~/.claude.json`, muss also nach dem Schreiben kommen.
 fn werkzeuge(bericht: &mut Bericht) {
+    // VOR dem Schreiben gefragt, sonst ist die Antwort immer „ja" (#1123).
+    // Geschrieben wird trotzdem in jedem Fall: Das Schreiben raeumt auch alte
+    // Schluessel weg, und das soll ein zweiter Lauf nachholen koennen.
+    let claude_vorher = config::claude_eintrag_genau();
+
     bericht.claude = match config::write_claude_config_mit_bericht() {
         Ok((pfad, geraeumt)) => {
             println!("Claude Code : {}", pfad.display());
@@ -267,10 +272,12 @@ fn werkzeuge(bericht: &mut Bericht) {
             }
 
             // Nachgelesen, nicht behauptet.
-            if config::claude_hat_eintrag() {
-                format!("eingetragen in {}", pfad.display())
-            } else {
+            if !config::claude_hat_eintrag() {
                 "geschrieben, aber nicht wiedergefunden — bitte nachsehen".to_string()
+            } else if claude_vorher {
+                format!("unverändert in {}", pfad.display())
+            } else {
+                format!("eingetragen in {}", pfad.display())
             }
         }
         Err(grund) => {
@@ -344,6 +351,41 @@ fn werkzeuge(bericht: &mut Bericht) {
     };
 }
 
+/// Schritt 4. Das Gedaechtnis abgleichen — und zwar ANWENDEN (#1123).
+///
+/// ## Warum angewendet wird und nicht nur angesehen
+///
+/// Bis v0.5.0 lief hier ein Trockenlauf, und die Zusammenfassung sagte
+/// trotzdem „abgeglichen" (Bug #1123). Zwei Wege standen offen: ehrlich
+/// melden, oder anwenden. Es ist anwenden, weil der Auftrag „ein Befehl,
+/// danach läuft alles" lautet — und weil `--apply` **ohne** eine
+/// Konfliktseite nachweisbar nichts verliert:
+///
+/// - Eine Datei, die hier anders ist als beim letzten Abgleich, gilt als
+///   hiesige Änderung und geht NACH AI Brain — sie wird nicht überschrieben.
+/// - Geschrieben wird hier nur, was es hier nicht gibt oder was sich seit dem
+///   letzten Abgleich ausschliesslich DORT geändert hat.
+/// - Beidseitig Geändertes bleibt unangetastet; dafür braucht es
+///   ausdrücklich `--hier-gewinnt` oder `--dort-gewinnt`.
+/// - Gelöscht wird nie, auf keiner Seite.
+///
+/// Der Fall ohne gemerkten Stand ist der strengste: Dort gilt jede Abweichung
+/// als Konflikt, und ein Konflikt wird nicht angefasst. Genau das macht den
+/// ersten Lauf auf einem fremden Rechner harmlos.
+///
+/// ## Und die Zeile sagt die Zahlen
+///
+/// Nicht „abgeglichen", sondern was bewegt wurde. Ein Fehlschlag einzelner
+/// Einträge bricht den Assistenten nicht ab — er steht in der Zeile.
+fn erinnerungen_abgleichen() -> String {
+    let args = ["--apply".to_string()];
+
+    match erinnerungen::abgleichen_mit_bilanz(&args) {
+        Ok((bilanz, verzeichnis)) => erinnerungen::bilanz_wort(&bilanz, &verzeichnis),
+        Err(grund) => format!("nicht abgeglichen: {}", kurz(&grund)),
+    }
+}
+
 /// „1 Konto" statt „1 Konten". Eine Zeile, die falsch beugt, liest sich wie
 /// eine, die niemand gelesen hat.
 fn konten_wort(n: usize) -> String {
@@ -373,11 +415,17 @@ fn kurz(grund: &str) -> String {
 }
 
 /// Eine Zeile für ein Werkzeug, das es geben kann oder nicht.
-fn melden(spalte: &str, ergebnis: Result<Option<String>, String>) -> String {
+///
+/// **Der Stand kommt aus dem Nachlesen** (#1123). Bis v0.5.0 stand hier
+/// „Eintrag „ai-brain" angelegt", und zwar bei jedem Lauf: Codex und `pi`
+/// ersetzen einen vorhandenen Eintrag stillschweigend, also war die Zeile beim
+/// zweiten Lauf eine Behauptung über etwas, das nicht geschehen war. Siehe
+/// {@link config::Eintragsstand}.
+fn melden(spalte: &str, ergebnis: Result<Option<config::Eintragsstand>, String>) -> String {
     match ergebnis {
-        Ok(Some(_)) => {
-            println!("{spalte}: Eintrag „ai-brain“ angelegt");
-            "eingetragen".to_string()
+        Ok(Some(stand)) => {
+            println!("{spalte}: {}", stand.wort());
+            stand.kurz().to_string()
         }
         Ok(None) => {
             println!("{spalte}: nicht installiert, übersprungen");

@@ -93,7 +93,11 @@ pub fn angemeldet(umgebung: &BTreeMap<String, String>) -> bool {
 }
 
 /// Der geltende Konfigurationsordner von Claude Code.
-fn konfigurationsordner(umgebung: &BTreeMap<String, String>) -> Option<String> {
+///
+/// `CLAUDE_CONFIG_DIR`, sonst `~/.claude`. Oeffentlich, weil auch das
+/// Gedaechtnis diesen Ort braucht — Claude Code fuehrt es unter
+/// `<ordner>/projects/<pfad>/memory/`. Siehe {@link crate::erinnerungen::gedaechtnis_pfad}.
+pub fn konfigurationsordner(umgebung: &BTreeMap<String, String>) -> Option<String> {
     if let Some(pfad) = umgebung
         .get("CLAUDE_CONFIG_DIR")
         .cloned()
