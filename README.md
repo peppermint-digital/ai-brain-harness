@@ -1038,41 +1038,51 @@ ohnehin, ob sie steht.
 
 #### Bedienung und Symbol
 
-- **Linksklick** öffnet das Menü, ein zweiter Klick schließt es wieder — wie
-  bei jedem anderen Tray-Programm.
-- **Rechtsklick** öffnet es ebenfalls.
+- **Rechtsklick** öffnet das Menü — wie bei den anderen Symbolen derselben
+  Leiste.
+- **Linksklick** öffnet AI Brain im Browser (die Adresse der Instanz, mit der
+  dieser Rechner verbunden ist). Derselbe Weg steht als **„AI Brain öffnen"**
+  im Menü; ohne bekannte Adresse ist der Punkt ausgegraut und der Klick still.
 - Die Leitung schaltet das **Häkchen „Live-Leitung"** im Menü, nicht der Klick
   auf das Symbol.
 
-**Warum nicht der Linksklick (Stand 27.10.2026).** Er hat es zwischendurch
-getan, und das war die Behebung eines anderen Punktes: Ohne Behandlung von
-`Activate` tat ein Linksklick gar nichts, und das sah aus wie ein Tray, der
-sich nicht schalten lässt. Der nächste Punkt kam direkt hinterher — *das Menü
-lässt sich nicht schließen*.
+**Drei Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
+freigelegt (Stand 28.10.2026).**
 
-Dazu stand hier, das sei nicht unsere Sache: StatusNotifierItem kenne keinen
-Weg, ein Menü von der Anwendung aus zu schließen. Die Technik stimmte, die
-Folgerung nicht. In derselben Leiste funktionieren **alle anderen** Programme
-so — Linksklick auf, zweiter Klick zu. Der Unterschied war, dass wir `Activate`
-selbst behandelt und das Menü damit zu einer Sache der Anwendung gemacht haben,
-statt es der Leiste zu überlassen.
+1. **Gar nichts** (bis v0.4.1): `Activate` war nicht behandelt. In den meisten
+   Leisten öffnet der *Rechtsklick* das Menü und der Linksklick löst
+   `Activate` aus — ohne Behandlung tat er also nichts, und von außen sah das
+   aus wie ein Tray, der sich nicht schalten und nicht beenden lässt. Ein
+   Klick, der nichts tut, ist schlimmer als kein Klick: Er lässt am Programm
+   zweifeln statt an der Bedienung.
+2. **Die Leitung schalten** (v0.4.2): löste den toten Klick. Ein Symbolklick,
+   der etwas schaltet, ist aber in keiner anderen Leiste so — die Umschaltung
+   sitzt seit v0.5.0 deshalb als Häkchen im Menü.
+3. **Das Menü öffnen** (v0.5.0, `ItemIsMenu` / `MENU_ON_ACTIVATE`):
+   spezifikationstreu und in Bastians Leiste trotzdem falsch. Das Menü ließ
+   sich per Linksklick nicht mehr schließen (Bug #1124).
 
-Jetzt setzt der Tray `ItemIsMenu` (ksni: `MENU_ON_ACTIVATE`), unter macOS und
-Windows `with_menu_on_left_click(true)`. Die Leiste öffnet das Menü also selbst
-— und schließt es deshalb auch selbst.
+Dazu die Messung, die den Punkt entschieden hat — im Quelltext der Leiste
+selbst (Omarchy 4.0.0.alpha, **quickshell**, nicht waybar,
+`/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`):
 
-Das **Schließen** des aufgeklappten Menüs gehört der Leiste, nicht dem Tray:
-StatusNotifierItem kennt keinen Weg, ein Menü von der Anwendung aus
-zuzumachen. Unter Omarchy (quickshell, `plugins/bar/widgets/Tray.qml`) hängt
-das Popup an einem `HyprlandFocusGrab`, in dem das Leistenfenster selbst
-steht — ein Klick auf das Symbol löst den Grab deshalb nicht, ein Klick
-irgendwo sonst schon. Esc ist dort nicht verdrahtet.
+- Ein Linksklick auf ein Item mit `onlyMenu` (= `ItemIsMenu`) ruft
+  `openTrayMenu()`, und das endet **immer** mit `trayMenuOpen = true`. Es gibt
+  kein Umschalten, `resetTrayMenu()` schließt nichts — ein zweiter Linksklick
+  öffnet neu.
+- Der Fokus-Griff des Menüs (`HyprlandFocusGrab` in `Ui/PopupCard.qml`) listet
+  `[popup, Leistenfenster]`. Ein Klick **auf** der Leiste klärt ihn deshalb
+  nie, einer außerhalb schon. Esc ist dort nicht verdrahtet.
 
-Der Linksklick fehlte bis zum 27.10.2026. In den meisten Leisten öffnet der
-*Rechtsklick* das Menü, der Linksklick löst `Activate` aus — ohne Handler tat
-er also nichts, und von außen sah das aus wie ein Tray, der sich nicht schalten
-und nicht beenden lässt. Ein Klick, der nichts tut, ist schlimmer als kein
-Klick: Er lässt am Programm zweifeln statt an der Bedienung.
+Beides gehört der Leiste. Gemeldet wird es dort; gepatcht wird dort nichts —
+ein Patch an einer Paketdatei ist beim nächsten Update weg. Deshalb jetzt
+`MENU_ON_ACTIVATE = false` und unter macOS und Windows
+`with_menu_on_left_click(false)`: Das Menü gehört dem Rechtsklick, und der
+Linksklick öffnet die Anwendung. Unsere Anwendung ist AI Brain.
+
+> Dass eine Begründung technisch richtig ist, heißt nicht, dass das Ergebnis
+> stimmt. „Die Leiste soll das Menü öffnen" war korrekt hergeleitet — und die
+> Leiste macht daraus kein Umschalten.
 
 Das Symbol wird **selbst gezeichnet** und nennt keinen Theme-Symbolnamen. Mit
 `network-*` aus dem Theme kam es auf einer dunklen Leiste als dunkel auf dunkel

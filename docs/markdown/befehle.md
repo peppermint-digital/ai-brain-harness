@@ -9,11 +9,13 @@ Argument zeigt sie.
 
 | Befehl | Was |
 |---|---|
+| `einrichten` | Der ganze Rechner in einem Befehl: verbinden, Skills und MCP-Server abgleichen, MCP-Eintrag in Claude Code, Codex, `pi` und die imkr-Konten, Gedaechtnis abgleichen, Leitungsdienst und Tray anbieten — und eine Zusammenfassung, die nachliest statt zu behaupten. Schon verbunden? Dann faellt Schritt 1 aus. |
 | `connect [domain]` | Rechner mit einer Instanz verbinden. Ohne Angabe die Instanz, von der das Programm kam. |
 | `status` | Zeigt die aktuelle Verbindung. |
 | `configure` | Traegt den MCP-Server in Claude Code und Codex ein. |
 | `disconnect` | Entfernt die lokale Verbindung. |
 | `freigabe [add <pfad>]` | Verzeichnisse, in denen Laeufe mehr duerfen als fragen. |
+| `erinnerungen [--apply]` | Das Gedaechtnis dieses Verzeichnisses mit AI Brain abgleichen. Ohne `--apply` wird nur gezeigt, was sich bewegen wuerde. Angewendet wird nichts ueberschrieben: Was auf beiden Seiten geaendert wurde, bleibt liegen, bis `--hier-gewinnt` oder `--dort-gewinnt` entscheidet; geloescht wird nie. |
 
 ## Arbeiten
 
@@ -77,7 +79,7 @@ Weitere Schalter fuer `sync`: `--only`, `--force`,
 | Befehl | Was |
 |---|---|
 | `leitung an [--dauer 30m]` | Von Hand einschalten, hoechstens 8 h. Hebt ein vorheriges `aus` auf. |
-| `leitung aus` | Auflegen — und zwar bis zum naechsten Einschalten, nicht bis zum naechsten Herzschlag. |
+| `leitung aus` | Auflegen — und zwar bis zum naechsten Einschalten, nicht bis zum naechsten Herzschlag. Der *Dienst* legt dabei auf und laeuft weiter, damit ein spaeteres `leitung an` ohne neue Anmeldung greift. |
 | `leitung status [--json]` | Schalter, Grund, Prozess, Verbindung. |
 | `leitung dienst` | Haelt die Leitung und schaltet sie selbst, nach der Freigabe in AI Brain. |
 | `leitung autostart` | Den Dienst beim Anmelden starten. `kein-autostart` bestellt es ab. |
@@ -87,7 +89,7 @@ Die Leitung zeigt ein imkr-Pane dieses Rechners in AI Brain und nimmt Tastendrue
 an. Der Rechner verbindet sich **ausgehend**; AI Brain ruft hier nie etwas auf.
 
 **Drei Zustaende, und die Reihenfolge ist die Regel.** Ein *Veto* (aus
-`leitung aus` oder dem Linksklick im Tray) schlaegt alles und hat keine Frist —
+`leitung aus` oder dem Haekchen im Tray-Menue) schlaegt alles und hat keine Frist —
 sonst waere „aus“ eine Bitte und keine Anweisung. Darunter gilt der Hand-Schalter mit
 seiner Restzeit, darunter die automatische Leitung. Sie hat keine Frist, sondern eine Bedingung:
 Mindestens ein Channel muss diesen Rechner in AI Brain freigegeben haben. Faellt die Freigabe,

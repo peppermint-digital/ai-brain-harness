@@ -75,6 +75,10 @@ Argument zeigt sie.</p>
 <h2>Einrichten</h2>
 <table>
 <tr><th>Befehl</th><th>Was</th></tr>
+<tr><td><code>einrichten</code></td><td>Der ganze Rechner in einem Befehl: verbinden, Skills und
+MCP-Server abgleichen, MCP-Eintrag in Claude Code, Codex, <code>pi</code> und die imkr-Konten,
+Gedaechtnis abgleichen, Leitungsdienst und Tray anbieten &mdash; und eine Zusammenfassung, die
+nachliest statt zu behaupten. Schon verbunden? Dann faellt Schritt 1 aus.</td></tr>
 <tr><td><code>connect [domain]</code></td><td>Rechner mit einer Instanz verbinden. Ohne Angabe
 die Instanz, von der das Programm kam.</td></tr>
 <tr><td><code>status</code></td><td>Zeigt die aktuelle Verbindung.</td></tr>
@@ -82,6 +86,10 @@ die Instanz, von der das Programm kam.</td></tr>
 <tr><td><code>disconnect</code></td><td>Entfernt die lokale Verbindung.</td></tr>
 <tr><td><code>freigabe [add &lt;pfad&gt;]</code></td><td>Verzeichnisse, in denen Laeufe mehr duerfen
 als fragen.</td></tr>
+<tr><td><code>erinnerungen [--apply]</code></td><td>Das Gedaechtnis dieses Verzeichnisses mit AI
+Brain abgleichen. Ohne <code>--apply</code> wird nur gezeigt, was sich bewegen wuerde. Angewendet
+wird nichts ueberschrieben: Was auf beiden Seiten geaendert wurde, bleibt liegen, bis
+<code>--hier-gewinnt</code> oder <code>--dort-gewinnt</code> entscheidet; geloescht wird nie.</td></tr>
 </table>
 
 <h2>Arbeiten</h2>
@@ -158,7 +166,8 @@ zum Ergaenzen <code>--dazu</code>.</td></tr>
 <tr><td><code>leitung an [--dauer 30m]</code></td><td>Von Hand einschalten, hoechstens 8 h. Hebt
 ein vorheriges <code>aus</code> auf.</td></tr>
 <tr><td><code>leitung aus</code></td><td>Auflegen &mdash; und zwar bis zum naechsten Einschalten,
-nicht bis zum naechsten Herzschlag.</td></tr>
+nicht bis zum naechsten Herzschlag. Der <em>Dienst</em> legt dabei auf und laeuft weiter, damit ein
+spaeteres <code>leitung an</code> ohne neue Anmeldung greift.</td></tr>
 <tr><td><code>leitung status [--json]</code></td><td>Schalter, Grund, Prozess, Verbindung.</td></tr>
 <tr><td><code>leitung dienst</code></td><td>Haelt die Leitung und schaltet sie selbst, nach der
 Freigabe in AI Brain.</td></tr>
@@ -169,7 +178,7 @@ Freigabe in AI Brain.</td></tr>
 <p>Die Leitung zeigt ein imkr-Pane dieses Rechners in AI Brain und nimmt Tastendruecke von dort
 an. Der Rechner verbindet sich <strong>ausgehend</strong>; AI Brain ruft hier nie etwas auf.</p>
 <p><strong>Drei Zustaende, und die Reihenfolge ist die Regel.</strong> Ein <em>Veto</em> (aus
-<code>leitung aus</code> oder dem Linksklick im Tray) schlaegt alles und hat keine Frist &mdash;
+<code>leitung aus</code> oder dem Haekchen im Tray-Menue) schlaegt alles und hat keine Frist &mdash;
 sonst waere &bdquo;aus&ldquo; eine Bitte und keine Anweisung. Darunter gilt der Hand-Schalter mit
 seiner Restzeit, darunter die automatische Leitung. Sie hat keine Frist, sondern eine Bedingung:
 Mindestens ein Channel muss diesen Rechner in AI Brain freigegeben haben. Faellt die Freigabe,
