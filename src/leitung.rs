@@ -730,7 +730,7 @@ fn grund_aus(text: &str) -> String {
         return "HTML-Seite statt JSON (Proxy oder Neustart?)".to_string();
     }
 
-    serde_json::from_str::<serde_json::Value>(&text)
+    serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| {
             v.get("message")
