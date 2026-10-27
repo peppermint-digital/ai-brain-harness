@@ -71,19 +71,29 @@ Aufrufe:
   ai-brain-harness chat [...]         Ein Gespraech hier fuehren (kurz: `brain`)
   ai-brain-harness agent [...]        Einen Agentenlauf hier starten
   ai-brain-harness agents             Welche Agentenlaeufe hier laufen
+  ai-brain-harness schleife [...]     Der eigene Agentenloop, ohne fremde Befehlszeile
+                                  (<frage> | --liste | --eintragen | --messen)
   ai-brain-harness aufgaben [...]     Offene Aufgaben eines Projekts (--projekt, --json)
   ai-brain-harness auftraege          Was AI Brain fuer diesen Rechner bereitlegt
   ai-brain-harness auftrag <nummer>   Einen Auftrag annehmen und abarbeiten
   ai-brain-harness auftrag-melden ..  Ergebnis eines Auftrags nachtragen
+  ai-brain-harness daueraufgaben      Dauerauftraege dieses Rechners (--fahren, --json)
+  ai-brain-harness taktgeber [...]    Taktgeber fuer Auftraege und Dauerauftraege
+                                  (--einrichten [--takt <kalender>] |
+                                  --entfernen | --zustand)
   ai-brain-harness nachricht ..       Nachrichten zwischen imkrs:
                                   kontakte | senden <person> <text> |
                                   abholen | bestaetigen <nummer>
   ai-brain-harness freigabe [...]     Verzeichnisse fuer Laeufe mit mehr Rechten
   ai-brain-harness leitung [...]      Live-Leitung: ein imkr-Pane in AI Brain zeigen
                                   (an [--dauer 30m] | aus | status), Standard aus
+  ai-brain-harness tunnel [...]       Den Browser deines Rechners an einen Agenten
+                                  hier geben (start | status | stop)
   ai-brain-harness logs <kennung>     Was ein Lauf geschrieben hat
   ai-brain-harness stop <kennung>     Einen Lauf beenden
   ai-brain-harness status             Zeigt die aktuelle Verbindung
+  ai-brain-harness verbrauch [...]    Token und Zeit der Sitzungen melden
+                                  (melden | zeigen | stand | an | aus | hook)
   ai-brain-harness configure          Traegt den MCP-Server in Claude Code und Codex ein
   ai-brain-harness disconnect         Entfernt die lokale Verbindung
 
