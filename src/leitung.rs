@@ -274,6 +274,13 @@ fn aus() -> Result<(), String> {
 }
 
 fn status() -> Result<(), String> {
+    // Zuerst die Verbindung, dann die Leitung: Wer „Schalter: aus" liest,
+    // soll nicht glauben, der Rechner haenge an keiner Instanz (#8914).
+    match verbindung_zeigen() {
+        Some(v) => println!("Verbindung: {} ({})", v.instanz, v.geraet),
+        None => println!("Verbindung: nicht verbunden — `ai-brain-harness connect`"),
+    }
+
     match schalter_lesen() {
         Some(bis) => println!("Schalter : an bis {} UTC", uhrzeit(bis)),
         None => println!("Schalter : aus"),
@@ -310,12 +317,49 @@ fn status_json() -> Result<String, String> {
         "prozess": prozess,
         "lage": lage,
         "protokoll": ablage("leitung.log")?,
+        // Additiv: Ein aelterer Tray liest das Feld nicht und bleibt heil, ein
+        // neuerer sieht an `null`, dass dieser Rechner keinen Zugang hat.
+        "verbindung": verbindung_zeigen(),
     })
     .to_string())
 }
 
 fn lage_gilt(lage: &Lage, prozess_lebt: bool) -> bool {
     prozess_lebt || lage.stand == "aufgelegt"
+}
+
+/// Was der Tray ueber die Verbindung wissen muss — und nichts darueber hinaus.
+///
+/// Weder Client-Secret noch Token-Endpunkt: Das hier wandert in ein Menue,
+/// das jeder sieht, der am Rechner sitzt.
+#[derive(Serialize)]
+pub struct VerbindungKurz {
+    pub instanz: String,
+    pub geraet: String,
+    pub basis: String,
+}
+
+/// Die hinterlegte Verbindung — oder `None`, wenn dieser Rechner keine hat.
+///
+/// ## Das ist der Zugang, nicht die Erreichbarkeit (Stand 27.10.2026)
+///
+/// „Verbunden" heisst hier: Es liegt ein Geraetezugang zu einer Instanz vor.
+/// Ob die Instanz in dieser Sekunde antwortet, steht hier NICHT — und das ist
+/// Absicht: Der Tray liest diesen Status alle zwei Sekunden, und eine
+/// HTTP-Anfrage in diesem Takt waere eine Dauerlast auf Brain fuer eine
+/// Auskunft, die niemand so oft braucht.
+///
+/// Die Erreichbarkeit sagt die Leitung selbst, solange sie laeuft: `lage`
+/// steht dann auf `verbunden` bzw. nennt den Grund. Deshalb zeigt der Tray
+/// beides nebeneinander statt einer Zahl, die beides vermischt.
+fn verbindung_zeigen() -> Option<VerbindungKurz> {
+    let c = config::load().ok()?;
+
+    Some(VerbindungKurz {
+        instanz: c.instance_name,
+        geraet: c.device_name,
+        basis: c.base_url,
+    })
 }
 
 // ---------------------------------------------------------------------------
