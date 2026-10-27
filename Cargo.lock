@@ -9,9 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ai-brain-autostart"
+version = "0.3.0"
+
+[[package]]
 name = "ai-brain-harness"
 version = "0.3.0"
 dependencies = [
+ "ai-brain-autostart",
  "base64",
  "gethostname",
  "serde",
@@ -25,6 +30,7 @@ dependencies = [
 name = "ai-brain-tray"
 version = "0.3.0"
 dependencies = [
+ "ai-brain-autostart",
  "ksni",
  "serde",
  "serde_json",

@@ -12,6 +12,14 @@ use serde::{Deserialize, Deserializer};
 pub struct Status {
     pub an: bool,
     pub bis: Option<i64>,
+    /// Warum sie an oder aus ist: `von Hand`, `automatisch`, `abgeschaltet`
+    /// oder `aus` (#8932). `None` heisst: Der Harness ist älter als das Feld.
+    ///
+    /// Gebraucht wird es, weil eine automatische Leitung KEIN `bis` hat. Ohne
+    /// dieses Wort stünde in der Leiste „aus" neben einer Leitung, die steht —
+    /// und das ist genau die Verwechslung, die #8914 schon einmal war.
+    #[serde(default)]
+    pub grund: Option<String>,
     pub prozess: Option<u32>,
     pub lage: Option<Lage>,
     pub protokoll: Option<String>,
@@ -192,12 +200,30 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
     // Der Zusatz ist laenger als schoen. Das ist der Preis: Die Zeile steht
     // in einem Menue, das man selten oeffnet, und dort ist Verstaendlichkeit
     // mehr wert als Kuerze.
-    let leitung = match an_bis {
-        Some(bis) => format!("{LEITUNG_WAS}: an, noch {}", restzeit(bis - jetzt)),
-        None => format!("{LEITUNG_WAS}: aus"),
+    //
+    // ## Und warum `bis` allein nicht mehr reicht (Stand 27.10.2026, #8932)
+    //
+    // Eine AUTOMATISCHE Leitung hat keine Restzeit — sie hat eine Bedingung.
+    // `status.bis` ist dann `null`, und bis hierher hiess das „aus". Damit
+    // haette in der Leiste „aus" gestanden, waehrend AI Brain mitlas: die
+    // Verwechslung aus #8914 noch einmal, nur gefaehrlicher. Also entscheidet
+    // `status.an`, und `grund` sagt, warum.
+    let leitung = match (status.an, an_bis, status.grund.as_deref()) {
+        (true, Some(bis), _) => format!("{LEITUNG_WAS}: an, noch {}", restzeit(bis - jetzt)),
+        (true, None, _) => {
+            format!("{LEITUNG_WAS}: an — automatisch, solange ein Channel diesen Rechner freigegeben hat")
+        }
+        // Abgeschaltet ist etwas anderes als „niemand hat eingeschaltet": Es
+        // ist eine Entscheidung, und sie gilt bis zum naechsten Einschalten.
+        // Wer das nicht liest, wartet darauf, dass die Leitung von selbst
+        // wiederkommt.
+        (false, _, Some("abgeschaltet")) => {
+            format!("{LEITUNG_WAS}: aus — abgeschaltet, bis du wieder einschaltest")
+        }
+        (false, ..) => format!("{LEITUNG_WAS}: aus"),
     };
 
-    let (lage, stoerung, laeuft) = lage_text(status, an_bis.is_some());
+    let (lage, stoerung, laeuft) = lage_text(status, status.an);
 
     let farbe = if stoerung {
         Farbe::Rot
@@ -205,7 +231,7 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
         Farbe::Grau
     } else if laeuft {
         Farbe::Gruen
-    } else if an_bis.is_some() {
+    } else if status.an {
         // An, aber noch nicht übertragend.
         Farbe::Gelb
     } else {
@@ -218,7 +244,7 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
         lage,
         quelle,
         farbe,
-        gefuellt: an_bis.is_some(),
+        gefuellt: status.an,
     }
 }
 
@@ -327,6 +353,94 @@ mod tests {
         assert_eq!(a.leitung, "Live-Leitung (AI Brain sieht deine Panes): aus");
         assert_eq!(a.farbe, Farbe::Blau);
         assert!(!a.gefuellt);
+    }
+
+    // ── Die automatische Leitung (#8932) ───────────────────────────────────
+
+    #[test]
+    fn eine_automatische_leitung_steht_nicht_als_aus_da() {
+        // Der Fall, an dem die alte Zeile zerbrochen wäre: `an` ja, `bis`
+        // null. Vor #8932 entschied `bis`, und die Leiste hätte „aus"
+        // gezeigt, während AI Brain mitliest.
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+                    "lage":{"stand":"verbunden","seit":0,"pane":"avatar-imkr/1"},
+                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(a.leitung.contains("an — automatisch"), "{}", a.leitung);
+        assert!(a.leitung.contains("freigegeben"), "{}", a.leitung);
+        assert!(!a.leitung.contains("aus"), "{}", a.leitung);
+        assert_eq!(a.farbe, Farbe::Gruen);
+        assert!(a.gefuellt, "eine stehende Leitung ist gefüllt");
+        assert_eq!(a.lage.as_deref(), Some("Verbunden, zeigt avatar-imkr/1"));
+    }
+
+    #[test]
+    fn eine_automatische_leitung_vor_der_verbindung_ist_gelb_und_gefuellt() {
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+                    "lage":{"stand":"verbindet","seit":0},
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert_eq!(a.farbe, Farbe::Gelb);
+        assert!(a.gefuellt);
+    }
+
+    #[test]
+    fn abgeschaltet_sagt_dass_es_so_bleibt() {
+        // „aus" allein liest sich wie „kommt gleich wieder". Bei einem Veto
+        // kommt sie nicht wieder, und das ist der Punkt.
+        let a = ansicht(
+            &da(r#"{"an":false,"bis":null,"grund":"abgeschaltet","prozess":4242,
+                    "lage":{"stand":"abgeschaltet","seit":0,"grund":"von Hand ausgeschaltet"},
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(
+            a.leitung.contains("aus — abgeschaltet, bis du wieder einschaltest"),
+            "{}",
+            a.leitung
+        );
+        assert!(!a.gefuellt);
+        // Keine Störung: Abgeschaltet ist eine Entscheidung, kein Defekt.
+        assert_eq!(a.farbe, Farbe::Blau);
+    }
+
+    #[test]
+    fn ein_wartender_dienst_ist_kein_fehler() {
+        // Der Normalfall auf einem Rechner ohne Freigabe: Der Dienst lebt, die
+        // Leitung steht nicht. Ein rotes Symbol hier würde jeden Rechner ohne
+        // Haken als gestört zeigen.
+        let a = ansicht(
+            &da(r#"{"an":false,"bis":null,"grund":"aus","prozess":4242,
+                    "lage":{"stand":"wartet","seit":0,
+                            "grund":"kein Channel hat diesen Rechner freigegeben"},
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert_eq!(a.leitung, "Live-Leitung (AI Brain sieht deine Panes): aus");
+        assert_eq!(a.farbe, Farbe::Blau);
+        assert_eq!(a.lage, None);
+    }
+
+    #[test]
+    fn ein_harness_ohne_grund_zeigt_weiter_das_richtige() {
+        // Ein älterer Harness kennt `grund` nicht. Dann gibt es nur `an` und
+        // `bis`, und genau so stand es vor #8932 da.
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":1800,"prozess":4242,"lage":null,
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(a.leitung.contains("an, noch"), "{}", a.leitung);
+        assert!(a.gefuellt);
     }
 
     #[test]

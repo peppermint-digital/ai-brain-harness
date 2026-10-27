@@ -1,0 +1,10 @@
+[package]
+name = "ai-brain-autostart"
+version = "0.3.0"
+edition = "2021"
+description = "Beim Anmelden starten — je Plattform anders, fuer Harness und Tray derselbe Mechanismus"
+license = "MIT"
+repository = "https://github.com/peppermint-digital/ai-brain-harness"
+
+# Keine. Die drei Mechanismen sind Dateitext, `launchctl` und `reg.exe`.
+[dependencies]

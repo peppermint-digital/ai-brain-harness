@@ -94,47 +94,199 @@ Aufrufe:
   ai-brain-harness leitung aus                ausschalten und auflegen
   ai-brain-harness leitung status [--json]    Schalter und Verbindung zeigen
   ai-brain-harness leitung laufen             die Leitung im Vordergrund halten
+  ai-brain-harness leitung dienst             halten und selbst an-/ausschalten
+  ai-brain-harness leitung autostart          den Dienst beim Anmelden starten
+  ai-brain-harness leitung kein-autostart     das wieder abbestellen
 
-Standard ist AUS. Ohne gueltigen Schalter baut der Rechner keine Verbindung
-auf; laeuft der Schalter ab, legt er selbst auf. Welches Pane gezeigt wird,
-bestimmt AI Brain — aber nur Panes auf diesem Rechner.
+Der Dienst schaltet die Leitung selbst an, sobald ein Channel diesen Rechner
+in AI Brain freigegeben hat — und wieder aus, sobald die Freigabe faellt.
+Ohne Freigabe bleibt sie aus.
+
+`leitung aus` und der Linksklick im Tray haben Vorrang: Das bleibt aus, bis du
+wieder einschaltest, nicht nur bis zum naechsten Herzschlag.
+
+Von Hand eingeschaltet gilt hoechstens 8 h; die automatische Leitung hat keine
+Frist, sondern eine Bedingung. Welches Pane gezeigt wird, bestimmt AI Brain —
+aber nur Panes auf diesem Rechner.
 ";
 
 // ---------------------------------------------------------------------------
 // Der Schalter
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
 struct Schalter {
+    /// Von Hand eingeschaltet, bis zu diesem Zeitpunkt. 0 heisst: nicht.
+    #[serde(default)]
     bis: i64,
+    /// Automatisch an, solange ein Channel diesen Rechner freigegeben hat.
+    /// Setzt und löscht ausschliesslich der Dienst, nach einer Auskunft von
+    /// AI Brain. Ohne Frist — die Bedingung ist die Freigabe (#8932).
+    #[serde(default)]
+    auto: bool,
+    /// Der Mensch hat abgeschaltet. Gilt bis zum nächsten Einschalten.
+    #[serde(default)]
+    veto: bool,
 }
 
-/// Bis wann der Schalter gilt — oder `None`, wenn er AUS ist.
+/// Warum die Leitung an oder aus ist.
 ///
-/// Rein, damit die Regel ohne Uhr und Dateisystem prüfbar ist. Ein Ablauf
-/// jenseits der Höchstdauer gilt als AUS, nicht als „gekappt": Den hat
-/// niemand über `leitung an` gesetzt, und eine Datei, die von Hand verlängert
-/// wurde, ist genau der Fall, gegen den ein Ablauf schützen soll.
-pub fn schalter_bis(roh: Option<&str>, jetzt: i64) -> Option<i64> {
-    let schalter: Schalter = serde_json::from_str(roh?).ok()?;
+/// **Die Reihenfolge IST die Regel**, deshalb steht sie in einer einzigen
+/// reinen Funktion und nicht verteilt über drei `if`s an drei Stellen
+/// ({@see schalter_stand}).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stand {
+    /// Niemand hat eingeschaltet.
+    Aus,
+    /// Der Mensch hat abgeschaltet — und das bleibt so, bis er wieder
+    /// einschaltet. Nicht bis zum nächsten Herzschlag.
+    Veto,
+    /// Von Hand, bis zu diesem Zeitpunkt (höchstens 8 h).
+    VonHand(i64),
+    /// Automatisch, weil eine Freigabe besteht.
+    Automatisch,
+}
 
-    (schalter.bis > jetzt && schalter.bis <= jetzt + HOECHSTDAUER).then_some(schalter.bis)
+impl Stand {
+    pub fn an(self) -> bool {
+        matches!(self, Stand::VonHand(_) | Stand::Automatisch)
+    }
+
+    /// Ein Wort für Mensch und Tray.
+    pub fn wort(self) -> &'static str {
+        match self {
+            Stand::Aus => "aus",
+            Stand::Veto => "abgeschaltet",
+            Stand::VonHand(_) => "von Hand",
+            Stand::Automatisch => "automatisch",
+        }
+    }
+}
+
+/// Die Vorrangregel, als eine Funktion.
+///
+/// | `veto` | `bis` gültig | `auto` | Ergebnis |
+/// |---|---|---|---|
+/// | ja | — | — | [`Stand::Veto`] — AUS |
+/// | nein | ja | — | [`Stand::VonHand`] — AN |
+/// | nein | nein | ja | [`Stand::Automatisch`] — AN |
+/// | nein | nein | nein | [`Stand::Aus`] |
+///
+/// **Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und der
+/// Linksklick im Tray schreiben es. Wäre es nur ein gelöschtes `auto`, würde
+/// die nächste Auskunft von AI Brain es binnen einer Minute wieder setzen —
+/// ein Schalter, der sich selbst zurückstellt, ist kein Schalter. Und ein
+/// Veto mit Ablaufzeit ginge wieder an, wenn niemand hinsieht; wer wieder
+/// mitlesen lassen will, schaltet ein, und das ist ein Klick.
+///
+/// **Der Hand-Schalter behält seine Höchstdauer**, die automatische Leitung
+/// hat keine. Der Deckel existiert, weil niemand ans Ausschalten denkt — eine
+/// Bedingung, die jede Minute neu gelesen wird, tut das strikt besser, und sie
+/// hängt am Besitzer in AI Brains Maske statt an dem, der zuletzt am Rechner
+/// sass. Ein `bis` jenseits der Höchstdauer gilt als nicht gesetzt: Den hat
+/// niemand über `leitung an` geschrieben, und eine von Hand verlängerte Datei
+/// ist genau der Fall, gegen den der Deckel schützt.
+///
+/// Rein, damit die Regel ohne Uhr und Dateisystem prüfbar ist — ein Test je
+/// Zeile der Tabelle.
+pub fn schalter_stand(roh: Option<&str>, jetzt: i64) -> Stand {
+    let Some(roh) = roh else {
+        return Stand::Aus;
+    };
+
+    // Unlesbar ist AUS, nicht AN: Eine halbe oder fremde Datei ist kein
+    // Einschaltbefehl.
+    let Ok(schalter) = serde_json::from_str::<Schalter>(roh) else {
+        return Stand::Aus;
+    };
+
+    if schalter.veto {
+        return Stand::Veto;
+    }
+
+    if schalter.bis > jetzt && schalter.bis <= jetzt + HOECHSTDAUER {
+        return Stand::VonHand(schalter.bis);
+    }
+
+    if schalter.auto {
+        return Stand::Automatisch;
+    }
+
+    Stand::Aus
 }
 
 fn ablage(name: &str) -> Result<PathBuf, String> {
     Ok(config::config_dir()?.join(name))
 }
 
-fn schalter_lesen() -> Option<i64> {
-    let roh = ablage("leitung.json")
+fn schalter_roh() -> Option<String> {
+    ablage("leitung.json")
         .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok());
+        .and_then(|p| std::fs::read_to_string(p).ok())
+}
 
-    schalter_bis(roh.as_deref(), jetzt())
+fn stand_jetzt() -> Stand {
+    schalter_stand(schalter_roh().as_deref(), jetzt())
+}
+
+/// Bis wann der HAND-Schalter gilt. Die automatische Leitung hat kein „bis".
+fn schalter_lesen() -> Option<i64> {
+    match stand_jetzt() {
+        Stand::VonHand(bis) => Some(bis),
+        _ => None,
+    }
 }
 
 fn schalter_gilt() -> bool {
-    schalter_lesen().is_some()
+    stand_jetzt().an()
+}
+
+/// Die Schalterdatei ändern, ohne die anderen Felder zu verlieren.
+///
+/// Lesen-Ändern-Schreiben und kein Neuschreiben: `an`, `aus` und der Dienst
+/// fassen je ein anderes Feld an. Wer die Datei überschreibt, löscht das Veto
+/// des Menschen oder die Auskunft des Dienstes mit — und zwar unbemerkt.
+fn schalter_aendern(f: impl FnOnce(&mut Schalter)) -> Result<Schalter, String> {
+    let mut schalter = schalter_roh()
+        .and_then(|roh| serde_json::from_str::<Schalter>(&roh).ok())
+        .unwrap_or_default();
+
+    f(&mut schalter);
+
+    let pfad = ablage("leitung.json")?;
+
+    if let Some(ordner) = pfad.parent() {
+        std::fs::create_dir_all(ordner)
+            .map_err(|e| format!("{} ist nicht anlegbar: {e}", ordner.display()))?;
+    }
+
+    // Alle drei Felder immer schreiben, auch die leeren: Ein älterer Harness
+    // verlangt `bis` und käme mit einer Datei ohne es nicht zurecht — er läse
+    // sie als „unlesbar" und damit als AUS. Das ist der richtige Ausgang, aber
+    // nur, wenn er die Datei überhaupt lesen kann.
+    std::fs::write(
+        &pfad,
+        serde_json::to_string(&schalter).unwrap_or_default(),
+    )
+    .map_err(|e| format!("{} ist nicht schreibbar: {e}", pfad.display()))?;
+
+    Ok(schalter)
+}
+
+/// Der Dienst sagt, ob eine Freigabe besteht. Er fasst `bis` und `veto` nicht an.
+fn auto_setzen(an: bool) {
+    if let Ok(roh) = schalter_roh().ok_or(()) {
+        // Nichts schreiben, wenn sich nichts ändert: Die Datei liegt im
+        // Konfigurationsordner, und eine Schreiboperation je Minute ist für
+        // eine Angabe, die sich selten ändert, nur Verschleiss.
+        if serde_json::from_str::<Schalter>(&roh).is_ok_and(|s| s.auto == an) {
+            return;
+        }
+    }
+
+    if let Err(grund) = schalter_aendern(|s| s.auto = an) {
+        melden(&format!("Schalter nicht schreibbar: {grund}"));
+    }
 }
 
 /// Liest eine Dauer: `90s`, `30m`, `2h`; eine blosse Zahl sind Minuten.
@@ -178,6 +330,9 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
         }
         Some("status") | None => status(),
         Some("laufen") => laufen(),
+        Some("dienst") => dienst(),
+        Some("autostart") => autostart_ein(),
+        Some("kein-autostart") => autostart_aus(),
         Some("--help") | Some("-h") | Some("help") => {
             print!("{HILFE}");
             Ok(())
@@ -208,18 +363,13 @@ fn an(args: &[String]) -> Result<(), String> {
     config::load()?;
 
     let bis = jetzt() + dauer;
-    let pfad = ablage("leitung.json")?;
 
-    if let Some(ordner) = pfad.parent() {
-        std::fs::create_dir_all(ordner)
-            .map_err(|e| format!("{} ist nicht anlegbar: {e}", ordner.display()))?;
-    }
-
-    std::fs::write(
-        &pfad,
-        serde_json::to_string(&Schalter { bis }).unwrap_or_default(),
-    )
-    .map_err(|e| format!("{} ist nicht schreibbar: {e}", pfad.display()))?;
+    // Das Veto nimmt das Einschalten zurück — genau dafür ist es da. „An" ist
+    // die Handlung, die ein „aus" aufhebt, und nur sie.
+    schalter_aendern(|s| {
+        s.bis = bis;
+        s.veto = false;
+    })?;
 
     if let Some(pid) = laufende_pid() {
         println!(
@@ -237,17 +387,25 @@ fn an(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Auflegen — und zwar BIS ZUM NÄCHSTEN EINSCHALTEN.
+///
+/// **Die Datei wird nicht gelöscht, sondern bekommt ein Veto.** Bis zum
+/// 27.10.2026 war Löschen richtig: Ohne Datei war die Leitung aus, Punkt.
+/// Seit es eine automatische Leitung gibt (#8932), wäre Löschen eine Falle —
+/// der Dienst fragt AI Brain, sieht die Freigabe, schreibt `auto` und wäre
+/// binnen einer Minute wieder da. Der Mensch hätte abgeschaltet und zugesehen,
+/// wie es von selbst angeht.
+///
+/// Das Veto hat deshalb keine Frist, und `leitung an` ist das Einzige, was es
+/// aufhebt. Siehe die Tabelle an {@see schalter_stand}.
 fn aus() -> Result<(), String> {
-    let pfad = ablage("leitung.json")?;
-
-    match std::fs::remove_file(&pfad) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("{} lässt sich nicht löschen: {e}", pfad.display())),
-    }
+    schalter_aendern(|s| {
+        s.bis = 0;
+        s.veto = true;
+    })?;
 
     let Some(pid) = laufende_pid() else {
-        println!("Leitung ist aus.");
+        println!("Leitung ist aus — und bleibt aus, bis du sie einschaltest.");
         return Ok(());
     };
 
@@ -258,7 +416,7 @@ fn aus() -> Result<(), String> {
 
     while beginn.elapsed() < Duration::from_secs(8) {
         if !prozess_lebt(pid) {
-            println!("Leitung ist aus, Verbindung beendet.");
+            println!("Leitung ist aus, Verbindung beendet — und bleibt aus, bis du sie einschaltest.");
             return Ok(());
         }
 
@@ -281,9 +439,11 @@ fn status() -> Result<(), String> {
         None => println!("Verbindung: nicht verbunden — `ai-brain-harness connect`"),
     }
 
-    match schalter_lesen() {
-        Some(bis) => println!("Schalter : an bis {} UTC", uhrzeit(bis)),
-        None => println!("Schalter : aus"),
+    match stand_jetzt() {
+        Stand::VonHand(bis) => println!("Schalter : an von Hand, bis {} UTC", uhrzeit(bis)),
+        Stand::Automatisch => println!("Schalter : an automatisch (ein Channel hat diesen Rechner freigegeben)"),
+        Stand::Veto => println!("Schalter : aus — abgeschaltet, bis du wieder einschaltest"),
+        Stand::Aus => println!("Schalter : aus"),
     }
 
     match laufende_pid() {
@@ -311,9 +471,20 @@ fn status_json() -> Result<String, String> {
         .and_then(|roh| serde_json::from_str::<Lage>(&roh).ok())
         .filter(|l| lage_gilt(l, prozess.is_some()));
 
+    let stand = stand_jetzt();
+
     Ok(serde_json::json!({
-        "an": schalter_lesen().is_some(),
+        // `an` bleibt die Frage „steht der Schalter auf an" und umfasst jetzt
+        // auch die automatische Leitung. Ein aelterer Tray zeigt damit das
+        // Richtige, ohne etwas von `grund` zu wissen.
+        "an": stand.an(),
+        // Nur der HAND-Schalter hat ein „bis". Die automatische Leitung hat
+        // eine Bedingung, und eine erfundene Ablaufzeit daneben waere eine
+        // Zahl, auf die sich niemand verlassen koennte.
         "bis": schalter_lesen(),
+        // Additiv: `aus`, `abgeschaltet`, `von Hand` oder `automatisch` (#8932).
+        // Ein Schalter, der von allein angeht, braucht ein Wort dazu.
+        "grund": stand.wort(),
         "prozess": prozess,
         "lage": lage,
         "protokoll": ablage("leitung.log")?,
@@ -456,6 +627,72 @@ fn geraet_merken(c: &Connection, name: &str) {
     );
 }
 
+/// Wie lange der Dienst zwischen zwei Freigabe-Fragen schläft.
+///
+/// Fünf Minuten, nicht eine: Ein Haken wird selten gesetzt, und wer ihn gerade
+/// setzt, wartet ohnehin ein paar Sekunden am Browser. Eine Minute wäre der
+/// Takt des Herzschlags — der gilt aber für eine STEHENDE Leitung, wo die
+/// Anfrage ohnehin läuft. Hier geht es um einen Rechner, der wartet, und der
+/// soll nicht im Minutentakt an eine Instanz klopfen.
+const FREIGABE_TAKT: Duration = Duration::from_secs(5 * 60);
+
+/// Hat ein Channel diesen Rechner freigegeben? `None` heisst „keine Auskunft".
+///
+/// **Und „keine Auskunft" ist nicht „ja".** Kein Netz, eine Instanz ohne das
+/// Feld (vor #8932), eine kaputte Antwort — in allen drei Fällen öffnet die
+/// automatische Leitung nicht. Fail-closed ist hier die richtige Richtung,
+/// anders als bei der Frage „lebt der Rechner?" ({@see GeraeteHerzschlag} auf
+/// der Brain-Seite): Dort war das fehlende Wissen UNSERES und hätte einen
+/// Befehl verhindert, den jemand ausdrücklich geschickt hat. Hier hat niemand
+/// etwas angefordert — die Leitung geht nur auf, WEIL ein Haken es sagt, und
+/// ohne Auskunft über den Haken gibt es keinen Anlass.
+///
+/// Von Hand einschalten geht unabhängig davon weiter.
+fn freigabe_fragen(c: &Connection) -> Option<bool> {
+    let text = anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP).ok()?;
+
+    freigabe_aus_ich(&text)
+}
+
+/// Die Freigabe aus der Antwort von `geraete/ich`.
+pub fn freigabe_aus_ich(text: &str) -> Option<bool> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()?
+        .get("imkr")?
+        .get("freigegeben")?
+        .as_bool()
+}
+
+/// Die Channel-Namen aus derselben Antwort.
+pub fn channels_aus_ich(text: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| {
+            Some(
+                v.get("imkr")?
+                    .get("channels")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|c| c.as_str().map(str::to_owned))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Dieselbe Auskunft, aber mit den Channel-Namen — fürs Protokoll.
+///
+/// Ein Schalter, der von allein angeht, und niemand kann sagen weshalb, wird
+/// zu Recht misstraut. Die Namen gehören dem Besitzer dieses Rechners: Eine
+/// Zeile in `channel_geraete` entsteht nur über die Maske, und die zeigt einer
+/// Person ihre eigenen Rechner.
+fn freigabe_channels(c: &Connection) -> Vec<String> {
+    match anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP) {
+        Ok(text) => channels_aus_ich(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn geraet_fragen(c: &Connection) -> Option<String> {
     let text = anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP).ok()?;
 
@@ -484,6 +721,12 @@ const ZUSTAND_DATEI: &str = "leitung-zustand.json";
 pub struct Lage {
     /// `verbindet`, `verbunden`, `getrennt` (versucht es wieder) oder
     /// `aufgelegt` (endgültig, z. B. 403).
+    ///
+    /// Dazu zwei Stände, die nur der Dienst kennt (#8932): `wartet` — er lebt,
+    /// die Leitung steht aber nicht, und das ist auf einem Rechner ohne
+    /// Freigabe der Normalfall und kein Fehler; `abgeschaltet` — ein Mensch
+    /// hat `leitung aus` gesagt. Der `grund` daneben sagt, welcher von beiden
+    /// es ist.
     pub stand: String,
     /// Seit wann (Unix-Sekunden).
     pub seit: i64,
@@ -648,6 +891,161 @@ enum Abbruch {
     Wieder(String),
 }
 
+// ---------------------------------------------------------------------------
+// Beim Anmelden starten
+// ---------------------------------------------------------------------------
+
+/// Der Autostart-Eintrag des Dienstes.
+///
+/// Eigenes Label, eigener Dateiname, eigener Run-Wert — er steht neben dem des
+/// Trays und nicht an seiner Stelle. Beide dürfen auf einem Rechner liegen:
+/// Der Tray braucht eine Desktop-Sitzung, der Dienst nicht, und ein Rechner
+/// ohne Leiste soll seine Leitung trotzdem halten.
+const DIENST_AUTOSTART: ai_brain_autostart::Eintrag = ai_brain_autostart::Eintrag {
+    label: "de.peppermint.ai-brain-leitung",
+    datei: "ai-brain-leitung",
+    name: "AI Brain — Leitung",
+    kommentar: "Haelt die Leitung zu AI Brain, solange ein Channel diesen Rechner freigegeben hat",
+    run_wert: "ai-brain-leitung",
+    args: &["leitung", "dienst"],
+};
+
+fn autostart_ein() -> Result<(), String> {
+    ai_brain_autostart::ein(&DIENST_AUTOSTART)?;
+
+    println!("Der Dienst startet ab dem nächsten Anmelden. Jetzt sofort starten:");
+    println!("  ai-brain-harness leitung dienst &");
+    println!();
+    println!("Die Leitung geht dann an, sobald ein Channel diesen Rechner freigegeben hat");
+    println!("— und aus, sobald die Freigabe fällt. `leitung aus` schaltet sie ab, und das");
+    println!("bleibt so, bis du sie wieder einschaltest.");
+
+    Ok(())
+}
+
+fn autostart_aus() -> Result<(), String> {
+    ai_brain_autostart::aus(&DIENST_AUTOSTART)
+}
+
+/// Die PID-Datei belegen — eine Leitung je Gerät.
+fn merker_belegen() -> Result<Merker, String> {
+    if let Some(pid) = laufende_pid().filter(|p| *p != std::process::id()) {
+        return Err(format!(
+            "Eine Leitung läuft schon (Prozess {pid}). Eine je Gerät."
+        ));
+    }
+
+    let pfad = ablage("leitung.pid")?;
+    std::fs::write(&pfad, format!("{}\n", std::process::id()))
+        .map_err(|e| format!("{} ist nicht schreibbar: {e}", pfad.display()))?;
+
+    Ok(Merker(pfad))
+}
+
+/// Warten, aber sofort aufwachen, wenn jemand einschaltet.
+///
+/// In Sekundenschritten statt eines langen `sleep`: Wer `leitung an` tippt,
+/// soll nicht bis zu fünf Minuten auf seine Leitung warten. `true` heisst
+/// „der Schalter steht jetzt auf an".
+fn warten_bis_an(dauer: Duration) -> bool {
+    let beginn = Instant::now();
+
+    while beginn.elapsed() < dauer {
+        if schalter_gilt() {
+            return true;
+        }
+
+        std::thread::sleep(Duration::from_secs(1));
+    }
+
+    schalter_gilt()
+}
+
+/// Der Dienst: läuft beim Anmelden an und bleibt (#8932).
+///
+/// **Was er tut, und was er bewusst nicht tut.** Er hält die Leitung, solange
+/// der Schalter auf an steht, und er führt das Feld `auto` nach der Auskunft
+/// von AI Brain. Er entscheidet nichts über Rechte: Ob ein Agent etwas darf,
+/// prüft Brain bei jedem Aufruf gegen `channel_geraete`. Dieser Dienst
+/// beseitigt nur den zweiten Schalter, der neben dem Haken stand.
+///
+/// **Kein systemd-Dienst, sondern der Autostart-Mechanismus** aus
+/// `ai-brain-autostart` (XDG-`.desktop`, LaunchAgent, Run-Key). Die Leitung
+/// gehört in die Nutzersitzung — sie spricht mit dem imkr-Server dieses
+/// Nutzers und liest seinen Konfigurationsordner. Ein Systemdienst wäre der
+/// falsche Geltungsbereich, und `systemd --user` gäbe es nur unter Linux.
+///
+/// **Er hält die PID-Datei für seine ganze Lebenszeit**, auch während er
+/// wartet. Sonst startete ein `leitung an` einen zweiten Prozess daneben, und
+/// zwei Leitungen auf einem Gerät schicken sich gegenseitig Endemarker.
+/// Stattdessen schreibt `an` nur den Schalter, und dieser Dienst wacht auf.
+fn dienst() -> Result<(), String> {
+    let _merker = merker_belegen()?;
+    let connection = config::load()?;
+
+    melden("Dienst gestartet.");
+
+    loop {
+        // 1 ─ Veto: nicht fragen, nicht öffnen. Ein abgeschalteter Rechner
+        //     soll auch keine Auskunft mehr einholen — das wäre Last für eine
+        //     Antwort, auf die er nicht reagieren darf.
+        if matches!(stand_jetzt(), Stand::Veto) {
+            lage_stand("abgeschaltet", Some("von Hand ausgeschaltet"));
+
+            if warten_bis_an(FREIGABE_TAKT) {
+                continue;
+            }
+
+            continue;
+        }
+
+        // 2 ─ Freigabe nachführen. Nur der Dienst schreibt `auto`.
+        let freigabe = freigabe_fragen(&connection);
+        let vorher = matches!(stand_jetzt(), Stand::Automatisch);
+
+        match freigabe {
+            Some(an) => {
+                auto_setzen(an);
+
+                if an && !vorher {
+                    let channels = freigabe_channels(&connection);
+                    melden(&format!(
+                        "Freigabe für diesen Rechner: {} — Leitung geht automatisch an.",
+                        if channels.is_empty() {
+                            "ja".to_string()
+                        } else {
+                            channels.join(", ")
+                        }
+                    ));
+                }
+            }
+            // Keine Auskunft heisst nicht „nein": `auto` bleibt, wie es war.
+            // Ein Netzausfall soll keine Leitung auflegen, die zu Recht stand.
+            None => melden("Keine Auskunft über die Freigabe — Schalter bleibt, wie er ist."),
+        }
+
+        // 3 ─ An? Dann halten. Sonst warten und neu fragen.
+        if !schalter_gilt() {
+            lage_stand(
+                "wartet",
+                Some(match freigabe {
+                    Some(false) => "kein Channel hat diesen Rechner freigegeben",
+                    Some(true) => "Schalter steht auf aus",
+                    None => "AI Brain antwortet nicht",
+                }),
+            );
+
+            warten_bis_an(FREIGABE_TAKT);
+            continue;
+        }
+
+        // Ein endgültiges Nein (403: Besitz oder Recht fehlt) beendet den
+        // Dienst. Dagegen anzurennen würde die Antwort nicht ändern — und ein
+        // Autostart ohne KeepAlive bringt ihn beim nächsten Anmelden wieder.
+        halten(&connection)?;
+    }
+}
+
 fn laufen() -> Result<(), String> {
     if !schalter_gilt() {
         return Err(
@@ -656,19 +1054,19 @@ fn laufen() -> Result<(), String> {
         );
     }
 
-    if let Some(pid) = laufende_pid().filter(|p| *p != std::process::id()) {
-        return Err(format!(
-            "Eine Leitung läuft schon (Prozess {pid}). Eine je Gerät."
-        ));
-    }
+    let _merker = merker_belegen()?;
+    let connection = config::load()?;
 
-    let merker_pfad = ablage("leitung.pid")?;
-    std::fs::write(&merker_pfad, format!("{}\n", std::process::id()))
-        .map_err(|e| format!("{} ist nicht schreibbar: {e}", merker_pfad.display()))?;
-    let _merker = Merker(merker_pfad);
+    halten(&connection)
+}
+
+/// Die Leitung halten, bis der Schalter fällt oder Brain endgültig abweist.
+///
+/// Setzt voraus, dass die PID-Datei schon belegt ist — darum kümmern sich
+/// {@see laufen} und {@see dienst}, und nur sie.
+fn halten(connection: &Connection) -> Result<(), String> {
     lage_stand("verbindet", None);
 
-    let connection = config::load()?;
     let mut steuerung = Steuerung::neu(connection.clone());
     let mut pause = 1;
 
@@ -678,7 +1076,7 @@ fn laufen() -> Result<(), String> {
             break Ok(());
         }
 
-        match sitzung(&connection, &mut steuerung, &mut pause) {
+        match sitzung(connection, &mut steuerung, &mut pause) {
             Ok(()) => {
                 melden("Schalter aus oder abgelaufen — lege auf.");
                 break Ok(());
@@ -1468,10 +1866,12 @@ fn herzschlag(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>, erster: b
     let rumpf = herzschlag_rumpf(imkr_version().as_deref(), pane.as_deref());
 
     match anfrage(c, "POST", PFAD_HERZSCHLAG, Some(&rumpf)) {
-        Ok(_) => {
+        Ok(antwort) => {
             if erster || HERZSCHLAG_UNBEKANNT.swap(false, Ordering::Relaxed) {
                 melden("Herzschlag angenommen, weiter alle 60 s.");
             }
+
+            freigabe_aus_schlag(&antwort);
         }
         Err(HttpFehler::Unbekannt(_)) => {
             if !HERZSCHLAG_UNBEKANNT.swap(true, Ordering::Relaxed) {
@@ -1481,6 +1881,41 @@ fn herzschlag(c: &Connection, endgueltig: &Arc<Mutex<Option<String>>>, erster: b
         Err(HttpFehler::Verboten(grund)) => verbieten(endgueltig, &grund),
         Err(e) => melden(&format!("Herzschlag nicht angenommen: {e:?}")),
     }
+}
+
+/// Was der Schlag über die Freigabe sagt — der Rückweg für einen ENTZUG.
+///
+/// **Ohne diesen Rückweg bliebe eine automatische Leitung offen, bis jemand
+/// den Rechner neu startet.** Der Haken fällt in AI Brain, und der Rechner
+/// erfährt es nie — der Herzschlag war bis zum 27.10.2026 ein reines
+/// Einbahn-Signal.
+///
+/// Fällt der Haken, verschwindet `auto`, und die Leitung sieht ihren Schalter
+/// binnen einer Sekunde fallen und legt selbst auf — derselbe Weg wie beim
+/// Ablauf des Hand-Schalters, also einer statt zweier.
+///
+/// **Eine Antwort OHNE das Feld ändert nichts.** Eine Instanz vor #8932
+/// antwortet 204 ohne Rumpf; das heisst „ich kann die Frage nicht
+/// beantworten" und nicht „nein". Hier `auto` zu löschen hiesse, eine Leitung
+/// wegen fehlenden Wissens aufzulegen, die eben noch zu Recht stand.
+fn freigabe_aus_schlag(antwort: &str) {
+    let Some(freigabe) = freigabe_im_schlag(antwort) else {
+        return;
+    };
+
+    if !freigabe && matches!(stand_jetzt(), Stand::Automatisch) {
+        melden("Keine Freigabe mehr für diesen Rechner — lege die automatische Leitung auf.");
+    }
+
+    auto_setzen(freigabe);
+}
+
+/// Was im Rumpf einer Herzschlag-Antwort steht. `None` = keine Aussage.
+pub fn freigabe_im_schlag(antwort: &str) -> Option<bool> {
+    serde_json::from_str::<serde_json::Value>(antwort)
+        .ok()?
+        .get("freigabe")?
+        .as_bool()
 }
 
 fn verbieten(endgueltig: &Arc<Mutex<Option<String>>>, grund: &str) {
@@ -3134,6 +3569,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn sitzungen_filter_haelt_die_ECHTE_form_von_imkr_ls_json_fest() {
         // Wortwörtlich aus `imkr ls --json` auf codingmachine am 27.10.2026,
         // nur um ein `tail` ergänzt — das liefert imkr bei einem wartenden
@@ -3260,30 +3696,203 @@ mod tests {
     fn schalter_ist_fail_closed() {
         let jetzt = 1_000_000;
 
-        assert_eq!(schalter_bis(None, jetzt), None, "keine Datei = aus");
-        assert_eq!(schalter_bis(Some("kaputt"), jetzt), None, "unlesbar = aus");
+        assert_eq!(schalter_stand(None, jetzt), Stand::Aus, "keine Datei = aus");
         assert_eq!(
-            schalter_bis(Some(r#"{"bis":999999}"#), jetzt),
-            None,
+            schalter_stand(Some("kaputt"), jetzt),
+            Stand::Aus,
+            "unlesbar = aus"
+        );
+        assert_eq!(
+            schalter_stand(Some(r#"{"bis":999999}"#), jetzt),
+            Stand::Aus,
             "abgelaufen = aus"
         );
         assert_eq!(
-            schalter_bis(Some(r#"{"bis":1000000}"#), jetzt),
-            None,
+            schalter_stand(Some(r#"{"bis":1000000}"#), jetzt),
+            Stand::Aus,
             "genau jetzt = aus"
         );
         assert_eq!(
-            schalter_bis(
+            schalter_stand(
                 Some(&format!(r#"{{"bis":{}}}"#, jetzt + HOECHSTDAUER + 1)),
                 jetzt
             ),
-            None,
+            Stand::Aus,
             "jenseits der Höchstdauer = aus, nicht gekappt"
         );
         assert_eq!(
-            schalter_bis(Some(r#"{"bis":1001800}"#), jetzt),
-            Some(1_001_800)
+            schalter_stand(Some(r#"{"bis":1001800}"#), jetzt),
+            Stand::VonHand(1_001_800)
         );
+    }
+
+    // ── Die Vorrangregel, ein Test je Zeile der Tabelle (#8932) ─────────────
+    //
+    // | veto | bis gültig | auto | Ergebnis |
+    // |---|---|---|---|
+    // | ja   | —    | —    | Veto — AUS        |
+    // | nein | ja   | —    | VonHand — AN      |
+    // | nein | nein | ja   | Automatisch — AN  |
+    // | nein | nein | nein | Aus               |
+
+    /// Zeile 1: Das Veto schlägt ALLES. Auch eine gültige Hand-Frist, auch
+    /// eine Freigabe. Sonst wäre „aus" eine Bitte und keine Anweisung.
+    #[test]
+    fn zeile_1_das_veto_schlaegt_alles() {
+        let jetzt = 1_000_000;
+
+        for datei in [
+            r#"{"bis":0,"auto":false,"veto":true}"#,
+            r#"{"bis":1001800,"auto":false,"veto":true}"#,
+            r#"{"bis":0,"auto":true,"veto":true}"#,
+            r#"{"bis":1001800,"auto":true,"veto":true}"#,
+        ] {
+            let stand = schalter_stand(Some(datei), jetzt);
+
+            assert_eq!(stand, Stand::Veto, "{datei}");
+            assert!(!stand.an(), "{datei}");
+        }
+    }
+
+    /// Zeile 2: Von Hand schlägt die Freigabe — und ist das Einzige mit Frist.
+    #[test]
+    fn zeile_2_von_hand_gilt_und_hat_eine_frist() {
+        let jetzt = 1_000_000;
+
+        assert_eq!(
+            schalter_stand(Some(r#"{"bis":1001800,"auto":false,"veto":false}"#), jetzt),
+            Stand::VonHand(1_001_800)
+        );
+        // Auch mit Freigabe daneben gewinnt die Hand: Sie nennt eine Frist,
+        // und wer sie gesetzt hat, soll sie in `status` wiederfinden.
+        assert_eq!(
+            schalter_stand(Some(r#"{"bis":1001800,"auto":true,"veto":false}"#), jetzt),
+            Stand::VonHand(1_001_800)
+        );
+        // Läuft die Hand-Frist ab, übernimmt die Freigabe — kein Loch.
+        assert_eq!(
+            schalter_stand(Some(r#"{"bis":999999,"auto":true,"veto":false}"#), jetzt),
+            Stand::Automatisch
+        );
+    }
+
+    /// Zeile 3: Automatisch an, ohne Frist. Die Bedingung steht in AI Brain.
+    #[test]
+    fn zeile_3_automatisch_gilt_ohne_frist() {
+        let jetzt = 1_000_000;
+        let stand = schalter_stand(Some(r#"{"bis":0,"auto":true,"veto":false}"#), jetzt);
+
+        assert_eq!(stand, Stand::Automatisch);
+        assert!(stand.an());
+        // Kein „bis": Eine erfundene Ablaufzeit wäre eine Zahl, auf die sich
+        // niemand verlassen könnte.
+        assert!(!matches!(stand, Stand::VonHand(_)));
+        // Und keine Höchstdauer, die sie nach 8 h fallen liesse: Das wäre
+        // „Harness installieren = alles läuft" mit einem Verfallsdatum.
+        assert_eq!(
+            schalter_stand(
+                Some(r#"{"bis":0,"auto":true,"veto":false}"#),
+                jetzt + 100 * HOECHSTDAUER
+            ),
+            Stand::Automatisch
+        );
+    }
+
+    /// Zeile 4: Nichts gesetzt ist aus — und unterscheidbar vom Veto.
+    #[test]
+    fn zeile_4_nichts_gesetzt_ist_aus_und_nicht_abgeschaltet() {
+        let jetzt = 1_000_000;
+        let stand = schalter_stand(Some(r#"{"bis":0,"auto":false,"veto":false}"#), jetzt);
+
+        assert_eq!(stand, Stand::Aus);
+        assert!(!stand.an());
+        // Der Unterschied ist nicht kosmetisch: Beim Veto fragt der Dienst
+        // nicht einmal nach der Freigabe, bei „aus" fragt er.
+        assert_ne!(stand, Stand::Veto);
+        assert_eq!(stand.wort(), "aus");
+        assert_eq!(Stand::Veto.wort(), "abgeschaltet");
+    }
+
+    /// Eine Datei aus der Zeit vor dem Veto liest sich unverändert.
+    #[test]
+    fn eine_alte_schalterdatei_gilt_weiter() {
+        // Genau so lag sie bis zum 27.10.2026 im Konfigurationsordner. Wer
+        // aktualisiert, soll seine laufende Leitung nicht verlieren.
+        assert_eq!(
+            schalter_stand(Some(r#"{"bis":1001800}"#), 1_000_000),
+            Stand::VonHand(1_001_800)
+        );
+    }
+
+    // ── Die Auskunft von AI Brain (#8932) ──────────────────────────────────
+
+    #[test]
+    fn die_freigabe_steht_in_geraete_ich() {
+        let mit = r#"{"id":"a5","name":"Bastian Laptop","besitzer":"Bastian",
+            "imkr":{"freigegeben":true,"sehen":1,"befehlen":1,"channels":["avatar-1"]}}"#;
+
+        assert_eq!(freigabe_aus_ich(mit), Some(true));
+        assert_eq!(channels_aus_ich(mit), vec!["avatar-1".to_string()]);
+
+        let ohne = r#"{"id":"a5","name":"Bastian Laptop",
+            "imkr":{"freigegeben":false,"sehen":0,"befehlen":0,"channels":[]}}"#;
+
+        assert_eq!(freigabe_aus_ich(ohne), Some(false));
+        assert!(channels_aus_ich(ohne).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn eine_instanz_ohne_das_feld_sagt_NICHT_nein() {
+        // Der Unterschied, an dem alles hängt: `None` heisst „keine Auskunft",
+        // und daraufhin öffnet die automatische Leitung nicht — aber sie legt
+        // auch keine auf, die zu Recht stand. Eine Instanz vor #8932 antwortet
+        // genau so.
+        let alt = r#"{"id":"a5","name":"Bastian Laptop","besitzer":"Bastian"}"#;
+
+        assert_eq!(freigabe_aus_ich(alt), None);
+        assert_eq!(freigabe_aus_ich("keine Antwort"), None);
+        assert_eq!(freigabe_aus_ich(r#"{"imkr":null}"#), None);
+        assert!(channels_aus_ich(alt).is_empty());
+    }
+
+    #[test]
+    fn der_herzschlag_bringt_die_freigabe_mit() {
+        assert_eq!(freigabe_im_schlag(r#"{"freigabe":true}"#), Some(true));
+        assert_eq!(freigabe_im_schlag(r#"{"freigabe":false}"#), Some(false));
+        // 204 ohne Rumpf: eine Instanz vor #8932. Keine Aussage, also keine
+        // Änderung am Schalter — sonst legte ein Teil-Ausrollen jede
+        // automatische Leitung auf.
+        assert_eq!(freigabe_im_schlag(""), None);
+        assert_eq!(freigabe_im_schlag("<html>502</html>"), None);
+        assert_eq!(freigabe_im_schlag(r#"{"freigabe":"ja"}"#), None);
+    }
+
+    /// Und die neue Datei bleibt für einen ÄLTEREN Harness lesbar.
+    #[test]
+    fn die_neue_schalterdatei_bricht_einen_aelteren_harness_nicht() {
+        // Der alte verlangte `bis` als Pflichtfeld. Deshalb schreibt
+        // `schalter_aendern` alle drei Felder, auch die leeren: Eine Datei
+        // ohne `bis` wäre für ihn unlesbar — was ihn zwar auf AUS stellt
+        // (richtig), aber er soll die Lage überhaupt beurteilen können.
+        #[derive(serde::Deserialize)]
+        struct Alt {
+            bis: i64,
+        }
+
+        let neu = serde_json::to_string(&Schalter {
+            bis: 0,
+            auto: true,
+            veto: false,
+        })
+        .unwrap();
+
+        let alt: Alt = serde_json::from_str(&neu).expect("der alte Harness liest die Datei");
+
+        // Er sieht `bis: 0`, also „abgelaufen", also aus. Eine automatische
+        // Leitung geht einem alten Harness verloren — sie geht ihm nicht
+        // versehentlich an.
+        assert_eq!(alt.bis, 0);
     }
 
     #[test]

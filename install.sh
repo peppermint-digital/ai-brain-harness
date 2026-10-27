@@ -408,6 +408,60 @@ tray_anbieten() {
     say "Jetzt starten:  $TRAY_NAME &"
 }
 
+# ---------------------------------------------------------------- Leitung ----
+
+# Die Leitung beim Anmelden halten — EINMAL fragen, dann nie wieder (#8932).
+#
+# Bisher brauchte es nach jeder Anmeldung `ai-brain-harness leitung an`, bevor
+# ein Channel-Agent den Rechner erreichen konnte. Das ist ein zweiter Schalter
+# neben dem Haken in AI Brain, und zwar einer an anderer Stelle, von anderer
+# Person, zu anderer Zeit. Der Dienst nimmt ihn weg: Er schaltet die Leitung
+# selbst an, solange ein Channel diesen Rechner freigegeben hat.
+#
+# Gefragt wird trotzdem, und aus demselben Grund wie beim Tray: Was auf dem
+# einen Rechner ungefragt startet, hat auf dem anderen auch nichts zu suchen.
+# Eine Frage WAEHREND der Installation ist kein Schritt DANACH — das Ziel
+# „Harness installieren = alles laeuft" bleibt damit erreicht.
+#
+# Ohne Terminal (Cron, Bereitstellung, Container) wird nicht gefragt und nicht
+# eingerichtet. Ein Dienst, der eine Leitung zu einem fremden Rechner oeffnet,
+# ist das Letzte, was man ungefragt aufsetzt.
+leitung_anbieten() {
+    say ""
+    say "Live-Leitung: Damit ein Channel-Agent (z. B. dein Avatar) die Fenster"
+    say "dieses Rechners sehen kann, muss die Leitung zu AI Brain stehen."
+    say "Der Dienst haelt sie — aber nur, solange ein Channel diesen Rechner in"
+    say "AI Brain freigegeben hat. Ohne Freigabe bleibt sie aus, und"
+    say "'$BIN_NAME leitung aus' schaltet sie jederzeit ab."
+
+    if ! (exec 3< /dev/tty) 2>/dev/null; then
+        say ""
+        say "Kein Terminal zum Fragen — Dienst nicht eingerichtet."
+        say "Spaeter von Hand:  $BIN_NAME leitung autostart"
+        return 0
+    fi
+
+    printf 'Leitungsdienst beim Anmelden starten? [j/N] ' > /dev/tty
+    antwort=""
+    read -r antwort < /dev/tty || antwort=""
+
+    case "$antwort" in
+        j|J|ja|Ja|JA|y|Y|yes|Yes)
+            # Wo der Autostart landet, sagt das Programm selbst — unter Linux
+            # ~/.config/autostart, unter macOS ein LaunchAgent, unter Windows
+            # der Run-Key.
+            if "$INSTALL_DIR/$BIN_NAME" leitung autostart; then
+                :
+            else
+                say "Dienst liess sich nicht einrichten."
+            fi
+            ;;
+        *)
+            say "Kein Dienst. Spaeter:  $BIN_NAME leitung autostart"
+            ;;
+    esac
+}
+
 # ------------------------------------------------------------------ PATH ----
 
 # Trägt die PATH-Zeile in eine Shell-Konfiguration ein — aber nur, wenn sie
@@ -488,6 +542,8 @@ fi
 ln -sf "$INSTALL_DIR/$BIN_NAME" "$INSTALL_DIR/$ALT_NAME"
 
 tray_anbieten
+
+leitung_anbieten
 
 say ""
 setup_path

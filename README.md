@@ -819,14 +819,87 @@ Tastendrücke von dort an. Der Rechner verbindet sich dafür **ausgehend**
 (Reverb, Pusher-Protokoll); AI Brain ruft hier nie etwas auf.
 
 ```bash
-ai-brain-harness leitung an --dauer 30m     # einschalten, höchstens 8 h
-ai-brain-harness leitung status [--json]    # Schalter, Prozess, Verbindung
-ai-brain-harness leitung aus                # auflegen
+ai-brain-harness leitung an --dauer 30m     # von Hand einschalten, höchstens 8 h
+ai-brain-harness leitung status [--json]    # Schalter, Grund, Prozess, Verbindung
+ai-brain-harness leitung aus                # auflegen, bis du wieder einschaltest
+ai-brain-harness leitung dienst             # halten und selbst an-/ausschalten
+ai-brain-harness leitung autostart          # den Dienst beim Anmelden starten
 ```
 
-Standard ist **aus**, und der Schalter läuft ab. Ohne gültigen Schalter wird
-nicht einmal der Kanal erfragt; fällt er, legt die Leitung selbst auf. Gezeigt
-werden nur Panes dieses Rechners, und Tastendrücke stehen nie im Protokoll.
+Gezeigt werden nur Panes dieses Rechners, und Tastendrücke stehen nie im
+Protokoll.
+
+### Der Schalter: drei Zustände, und die Reihenfolge ist die Regel
+
+Bis zum 27.10.2026 war der Schalter einfach: aus, bis jemand `leitung an`
+tippt. Seit #8932 schaltet der Rechner auch selbst — sobald ein Channel ihn in
+AI Brain freigegeben hat. Damit gibt es drei Einträge in `leitung.json`, und
+**sie werden in dieser Reihenfolge gelesen**:
+
+| `veto` | `bis` gültig | `auto` | Ergebnis | |
+|---|---|---|---|---|
+| **ja** | — | — | **aus** | Ein Mensch hat abgeschaltet |
+| nein | **ja** | — | **an** | Von Hand, mit Restzeit |
+| nein | nein | **ja** | **an** | Automatisch, mit Bedingung |
+| nein | nein | nein | **aus** | Niemand hat eingeschaltet |
+
+**Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und der
+Linksklick im Tray schreiben es, `leitung an` und der Linksklick löschen es —
+und nichts sonst. Wäre „aus" bloss ein gelöschtes `auto`, würde die nächste
+Auskunft von AI Brain es binnen einer Minute wieder setzen: ein Schalter, der
+sich selbst zurückstellt, ist kein Schalter. Und ein Veto mit Ablaufzeit ginge
+wieder an, wenn niemand hinsieht.
+
+**Von Hand behält die Höchstdauer von 8 h, automatisch hat keine.** Der Deckel
+existiert, weil niemand ans Ausschalten denkt — eine Bedingung, die jede Minute
+neu gelesen wird, tut das strikt besser, und sie hängt am Besitzer in AI Brains
+Maske statt an dem, der zuletzt am Rechner sass. Läuft die Hand-Frist ab,
+übernimmt die automatische Leitung; es gibt dazwischen kein Loch.
+
+Ein `bis` jenseits der Höchstdauer gilt als nicht gesetzt — den hat niemand
+über `leitung an` geschrieben, und eine von Hand verlängerte Datei ist genau
+der Fall, gegen den der Deckel schützt. Eine unlesbare Datei ist **aus**.
+
+### Automatisch an — woher der Rechner das weiss
+
+```
+ai-brain-harness leitung autostart     # einmal, oder beim Installieren
+```
+
+Danach läuft `leitung dienst` ab jedem Anmelden. Er fragt
+`GET /api/v1/geraete/ich`; dort steht seit #8932
+
+```json
+"imkr": { "freigegeben": true, "sehen": 1, "befehlen": 1, "channels": ["avatar-1"] }
+```
+
+Steht dort `freigegeben: true`, setzt er `auto` — und die Leitung geht an, ohne
+dass jemand etwas tippt. Steht dort `false`, bleibt sie aus. Solange sie steht,
+bringt **jeder Herzschlag** die Angabe mit (`200 {"freigabe": …}`): Fällt der
+Haken in AI Brain, verschwindet `auto`, und die Leitung legt binnen einer
+Sekunde selbst auf — derselbe Weg wie beim Ablauf des Hand-Schalters.
+
+**Keine Auskunft ist nicht „nein".** Kein Netz, eine Instanz ohne das Feld, eine
+kaputte Antwort: Dann öffnet die automatische Leitung nicht — und sie legt auch
+keine auf, die zu Recht stand. Von Hand einschalten geht unabhängig davon
+weiter.
+
+**Das verschiebt die Sperre nicht.** Ob ein Agent etwas darf, prüft AI Brain bei
+jedem Aufruf gegen die Freigabe je Channel und Gerät. Eine offene Leitung ohne
+Freigabe ist nutzlos, nicht erlaubt — sie trotzdem zu schliessen ist Hygiene.
+
+**Kein systemd-Dienst**, sondern derselbe Autostart-Mechanismus wie beim Tray
+(`ai-brain-autostart`: XDG-`.desktop`, LaunchAgent, Windows-Run-Key). Die
+Leitung gehört in die Nutzersitzung — sie spricht mit dem imkr-Server dieses
+Nutzers und liest seinen Konfigurationsordner. Ein Systemdienst wäre der
+falsche Geltungsbereich, und `systemd --user` gäbe es nur unter Linux. Ohne
+`KeepAlive`: Was sich erholen kann, erholt sich in der eigenen Schleife, und
+ein 403 ändert sich durch Neustarten nicht.
+
+Der Dienst hält die PID-Datei für seine ganze Lebenszeit, auch während er
+wartet. Sonst startete `leitung an` einen zweiten Prozess daneben, und zwei
+Leitungen auf einem Gerät schicken sich gegenseitig Endemarker. Stattdessen
+schreibt `an` nur den Schalter, und der Dienst wacht binnen einer Sekunde auf.
 
 Solange die Leitung steht, schickt sie alle 60 s einen Herzschlag
 (`POST /api/v1/geraete/herzschlag` mit Harness-Version, imkr-Version und
@@ -898,12 +971,27 @@ ai-brain-tray --pruefen                     # gibt es hier eine Leiste?
 | Zeile | Was sie sagt |
 |---|---|
 | `Mit AI Brain verbunden (Gerät …)` | Es liegt ein Gerätezugang vor. |
-| `Live-Leitung (AI Brain sieht deine Panes): an, noch 2 h` / `aus` | Der Schalter aus `leitung an`/`aus`. |
+| `Live-Leitung (AI Brain sieht deine Panes): an, noch 2 h` | Von Hand, mit Restzeit. |
+| `… : an — automatisch, solange ein Channel diesen Rechner freigegeben hat` | Der Dienst hält sie. |
+| `… : aus — abgeschaltet, bis du wieder einschaltest` | Jemand hat das Veto gesetzt. |
+| `… : aus` | Niemand hat eingeschaltet, und es gibt keine Freigabe. |
 | `Verbunden, zeigt bau/2` | Wie es der laufenden Leitung geht. |
 
 Der Zusatz in Klammern ist länger als schön. `Live-Leitung: aus` versteht aber
 nur, wer weiß, was die Leitung tut — und ein Schalter, dessen Wirkung man nicht
 kennt, wird entweder nie oder versehentlich benutzt.
+
+**Die Zeile hängt seit #8932 an `an`, nicht mehr an `bis`.** Eine automatische
+Leitung hat keine Restzeit, also ist `bis` dort `null` — und bis dahin hiess
+das „aus". In der Leiste hätte „aus" gestanden, während AI Brain mitliest:
+dieselbe Verwechslung wie #8914, nur gefährlicher. Das Wort daneben kommt aus
+dem neuen Feld `grund` (`von Hand`, `automatisch`, `abgeschaltet`, `aus`); ein
+älterer Harness schickt es nicht, und dann gilt wieder `bis` allein.
+
+**`aus` und `abgeschaltet` stehen getrennt da.** „aus" liest sich wie „kommt
+gleich wieder"; bei einem Veto kommt sie nicht wieder, und das ist der Punkt.
+Ein wartender Dienst auf einem Rechner ohne Freigabe ist dabei **kein Fehler** —
+er bleibt blau, nicht rot: Sonst sähe jeder Rechner ohne Haken gestört aus.
 
 Der **Gerätename** kommt aus AI Brain, nicht aus der `connection.json`: Dort
 steht er als Abschrift vom Kopplungstag, und wer den Zugang später unter „Meine

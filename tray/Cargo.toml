@@ -9,6 +9,7 @@ repository = "https://github.com/peppermint-digital/ai-brain-harness"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ai-brain-autostart = { path = "../autostart" }
 
 # Linux: StatusNotifierItem ueber D-Bus, reines Rust, ohne GTK.
 # Ohne tokio: der blockierende Weg ueber async-io reicht fuer ein Menue.

@@ -14,6 +14,7 @@ gethostname = "0.5"
 sha2 = "0.10"
 tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 base64 = "0.22"
+ai-brain-autostart = { path = "autostart" }
 
 [profile.release]
 strip = true
@@ -24,4 +25,4 @@ opt-level = "z"
 # Der Tray ist ein eigenes Binary: Er braucht eine Desktop-Sitzung, der
 # Harness nicht — und ein Tray-Absturz soll keine Leitung kappen.
 [workspace]
-members = ["tray"]
+members = ["tray", "autostart"]
