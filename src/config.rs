@@ -398,7 +398,7 @@ pub fn claude_hat_eintrag() -> bool {
 /// Seitdem wird vorher nachgesehen. Steht der Eintrag schon genau so da, wird
 /// gar nicht geschrieben: Ein Einrichtungsbefehl, den man zweimal aufruft,
 /// soll beim zweiten Mal nichts tun und das auch sagen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Eintragsstand {
     /// Stand schon genau so da — nichts geschrieben.
     Schon,
@@ -406,31 +406,50 @@ pub enum Eintragsstand {
     Angelegt,
     /// Es gab einen, aber er zeigte woanders hin.
     Erneuert,
-    /// Geschrieben und danach nicht wiedergefunden. Das ist ein Befund, kein
-    /// Erfolg — die Zeile sagt es, statt „eingetragen" zu behaupten.
+    /// Das Werkzeug hat geantwortet, und der Eintrag ist nicht da. Das ist ein
+    /// Befund, kein Erfolg — die Zeile sagt es, statt „eingetragen" zu
+    /// behaupten.
     Verschwunden,
+    /// Geschrieben, aber die NACHLESE war nicht möglich (#1127).
+    ///
+    /// **Das ist nicht dasselbe wie {@link Eintragsstand::Verschwunden}**, und
+    /// die Verwechslung hat Bug #1127 ausgelöst: Auf Bastians Laptop schreibt
+    /// der mise-Wrapper eine Zeile vor die Antwort von `codex mcp list
+    /// --json`; das Parsen scheiterte, und gemeldet wurde „nicht
+    /// wiedergefunden" — obwohl der Eintrag korrekt dastand.
+    ///
+    /// „Die Antwort sagt nein" und „ich habe keine Antwort" sind zwei
+    /// verschiedene Auskünfte. Derselbe Denkfehler wie in #1123, eine Ebene
+    /// tiefer.
+    Ungeprueft(String),
 }
 
 impl Eintragsstand {
     /// Ein ganzer Satz fuer die Zeile beim Schritt.
-    pub fn wort(self) -> &'static str {
+    pub fn wort(&self) -> String {
         match self {
-            Eintragsstand::Schon => "Eintrag „ai-brain“ stand schon drin",
-            Eintragsstand::Angelegt => "Eintrag „ai-brain“ angelegt",
-            Eintragsstand::Erneuert => "Eintrag „ai-brain“ erneuert (zeigte vorher woanders hin)",
+            Eintragsstand::Schon => "Eintrag „ai-brain“ stand schon drin".to_string(),
+            Eintragsstand::Angelegt => "Eintrag „ai-brain“ angelegt".to_string(),
+            Eintragsstand::Erneuert => {
+                "Eintrag „ai-brain“ erneuert (zeigte vorher woanders hin)".to_string()
+            }
             Eintragsstand::Verschwunden => {
-                "geschrieben, aber nicht wiedergefunden — bitte nachsehen"
+                "geschrieben, aber nicht wiedergefunden — bitte nachsehen".to_string()
+            }
+            Eintragsstand::Ungeprueft(grund) => {
+                format!("Eintrag „ai-brain“ geschrieben, nicht nachgelesen ({grund})")
             }
         }
     }
 
     /// Dasselbe in Kurzform, fuer eine Uebersichtszeile.
-    pub fn kurz(self) -> &'static str {
+    pub fn kurz(&self) -> String {
         match self {
-            Eintragsstand::Schon => "schon drin",
-            Eintragsstand::Angelegt => "eingetragen",
-            Eintragsstand::Erneuert => "erneuert",
-            Eintragsstand::Verschwunden => "geschrieben, aber nicht wiedergefunden",
+            Eintragsstand::Schon => "schon drin".to_string(),
+            Eintragsstand::Angelegt => "eingetragen".to_string(),
+            Eintragsstand::Erneuert => "erneuert".to_string(),
+            Eintragsstand::Verschwunden => "geschrieben, aber nicht wiedergefunden".to_string(),
+            Eintragsstand::Ungeprueft(_) => "eingetragen (nicht nachgelesen)".to_string(),
         }
     }
 }
@@ -516,7 +535,7 @@ pub fn write_codex_config() -> Result<Option<Eintragsstand>, String> {
     // nicht nur Hoeflichkeit gegenueber der Datei: `codex mcp remove` + `add`
     // raeumt den Eintrag kurz weg, und ein Lauf, der nichts aendern soll,
     // soll auch kein Fenster oeffnen, in dem er fehlt.
-    if vorher == Some(true) {
+    if matches!(vorher, Ok(Some(true))) {
         return Ok(Some(Eintragsstand::Schon));
     }
 
@@ -538,7 +557,7 @@ pub fn write_codex_config() -> Result<Option<Eintragsstand>, String> {
         return Err(format!("codex mcp add schlug fehl: {}", fehler.trim()));
     }
 
-    Ok(Some(nachgelesen(vorher, codex_zeigt_auf(&pfad))))
+    Ok(Some(nachgelesen_wenn_moeglich(vorher, codex_zeigt_auf(&pfad))))
 }
 
 /// Zeigt Codex' Eintrag „ai-brain" genau auf uns? `None` = es gibt keinen.
@@ -547,26 +566,42 @@ pub fn write_codex_config() -> Result<Option<Eintragsstand>, String> {
 /// gehoert ihm (`[mcp_servers.ai-brain]`, dazu `[features]` und
 /// `[projects."…"]`), und `codex mcp list --json` ist die Auskunft, die er
 /// dafuer anbietet — sie liest nur und ist sofort da.
-fn codex_zeigt_auf(unser: &str) -> Option<bool> {
+fn codex_zeigt_auf(unser: &str) -> Result<Option<bool>, String> {
     let aus = std::process::Command::new("codex")
         .args(["mcp", "list", "--json"])
         .output()
-        .ok()?;
+        .map_err(|e| format!("codex liess sich nicht aufrufen: {e}"))?;
 
     if !aus.status.success() {
-        return None;
+        return Err("codex mcp list --json antwortet nicht".to_string());
     }
 
-    let liste: Vec<serde_json::Value> = serde_json::from_slice(&aus.stdout).ok()?;
+    // NICHT blind parsen (#1127): Auf Omarchy ist `codex` ein mise-Wrapper,
+    // und mise schreibt eine Zeile wie
+    // `mise ~/.config/mise/config.toml tools: codex@0.163.0` VOR die Antwort,
+    // auf die Standardausgabe. Gemessen auf Bastians Laptop am 27.10.2026.
+    let wert = crate::mcp_eintraege::json_ab_erster_klammer(&aus.stdout)
+        .map_err(|e| format!("codex mcp list --json lieferte kein JSON: {e}"))?;
 
-    let eintrag = liste
+    let liste = wert
+        .as_array()
+        .ok_or_else(|| "codex mcp list --json lieferte keine Liste".to_string())?;
+
+    let Some(eintrag) = liste
         .iter()
-        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("ai-brain"))?;
+        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some("ai-brain"))
+    else {
+        // Geantwortet, und „ai-brain" ist nicht dabei: eine Auskunft, kein
+        // Fehlschlag.
+        return Ok(None);
+    };
 
     // Codex haengt den Befehl unter `transport` ein, nicht an die Wurzel.
-    let transport = eintrag.get("transport")?;
+    let Some(transport) = eintrag.get("transport") else {
+        return Ok(Some(false));
+    };
 
-    Some(befehl_zeigt_auf(transport, unser))
+    Ok(Some(befehl_zeigt_auf(transport, unser)))
 }
 
 /// Aus Vorher und Nachher einen Stand machen — fuer jedes Werkzeug gleich.
@@ -582,6 +617,32 @@ fn nachgelesen(vorher: Option<bool>, nachher: Option<bool>) -> Eintragsstand {
     match vorher {
         None => Eintragsstand::Angelegt,
         _ => Eintragsstand::Erneuert,
+    }
+}
+
+/// Dasselbe fuer ein Werkzeug, dessen Auskunft auch ausfallen kann (#1127).
+///
+/// Der Unterschied zu {@link nachgelesen} ist der ganze Punkt: Ein `Err`
+/// heisst „ich habe keine Antwort" und wird zu
+/// {@link Eintragsstand::Ungeprueft} — nicht zu „nicht wiedergefunden". Wer
+/// beides zusammenfasst, meldet einen Fehlbefund an einem Rechner, auf dem
+/// alles stimmt.
+fn nachgelesen_wenn_moeglich(
+    vorher: Result<Option<bool>, String>,
+    nachher: Result<Option<bool>, String>,
+) -> Eintragsstand {
+    match nachher {
+        Ok(n) => nachgelesen(vorher_wert(&vorher), n),
+        Err(grund) => Eintragsstand::Ungeprueft(grund),
+    }
+}
+
+/// Der Vorher-Wert, soweit es einen gibt. Ohne Auskunft gilt „weiss nicht",
+/// und das fuehrt zu „angelegt" — die vorsichtigere der beiden Aussagen.
+fn vorher_wert(vorher: &Result<Option<bool>, String>) -> Option<bool> {
+    match vorher {
+        Ok(w) => *w,
+        Err(_) => None,
     }
 }
 
@@ -1136,6 +1197,51 @@ mod eintraege {
 
         let fremd = serde_json::json!({"command": "npx", "args": ["mcp"]});
         assert!(!befehl_zeigt_auf(&fremd, unser));
+    }
+
+    /// #1127: „die Antwort sagt nein" ist nicht „ich habe keine Antwort".
+    ///
+    /// Auf Bastians Laptop schrieb der mise-Wrapper eine Zeile vor die
+    /// Antwort von `codex mcp list --json`. Das Parsen scheiterte, und
+    /// gemeldet wurde „geschrieben, aber nicht wiedergefunden" — an einem
+    /// Rechner, auf dem der Eintrag korrekt dastand. Das Parsen ist behoben;
+    /// dieser Test nagelt fest, dass ein Ausfall der Auskunft trotzdem nie
+    /// wieder als Fehlbefund herauskommt.
+    #[test]
+    fn ohne_auskunft_wird_nichts_behauptet() {
+        use Eintragsstand::*;
+
+        let stand = nachgelesen_wenn_moeglich(
+            Err("codex mcp list --json antwortet nicht".to_string()),
+            Err("codex mcp list --json antwortet nicht".to_string()),
+        );
+
+        assert!(matches!(stand, Ungeprueft(_)), "{stand:?}");
+        // Und die Zeile sagt es auch so.
+        assert!(
+            stand.wort().contains("nicht nachgelesen"),
+            "{}",
+            stand.wort()
+        );
+        assert!(
+            !stand.wort().contains("nicht wiedergefunden"),
+            "{}",
+            stand.wort()
+        );
+
+        // Keine Auskunft VORHER, aber eine danach: dann gilt die danach. Ohne
+        // Vorher-Wert ist „angelegt" die vorsichtigere der beiden Aussagen.
+        assert_eq!(
+            nachgelesen_wenn_moeglich(Err("keine Auskunft".to_string()), Ok(Some(true))),
+            Angelegt
+        );
+
+        // Geantwortet und der Eintrag fehlt wirklich — DAS ist ein Befund.
+        assert_eq!(nachgelesen_wenn_moeglich(Ok(None), Ok(None)), Verschwunden);
+        assert_eq!(
+            nachgelesen_wenn_moeglich(Ok(Some(false)), Ok(Some(true))),
+            Erneuert
+        );
     }
 
     #[test]

@@ -417,21 +417,33 @@ pub fn codex_lesen(name: &str) -> Result<Option<serde_json::Value>, String> {
     Ok(Some(codex_normalisieren(&wert)))
 }
 
-/// Liest das JSON-Objekt ab der ersten Zeile, die mit `{` beginnt.
+/// Liest das JSON ab der ersten Zeile, die mit `{` oder `[` beginnt.
 ///
 /// `codex` ist auf Omarchy-Rechnern ein Wrapper, der vorher `mise use -g codex`
 /// aufruft — und mise schreibt dabei eine Zeile wie
 /// `mise ~/.config/mise/config.toml tools: codex@0.160.1` auf die
 /// Standardausgabe, VOR das JSON. Am 15.10.2026 brach `sync` daran auf dem
 /// Laptop ab. Was davor steht, ist nie Teil der Antwort.
-fn json_ab_erster_klammer(stdout: &[u8]) -> Result<serde_json::Value, serde_json::Error> {
+///
+/// **Auch eine Liste** (#1127): `codex mcp get --json` antwortet mit einem
+/// Objekt, `codex mcp list --json` mit einem Array. Dieser Helfer kannte nur
+/// `{`, und die Nachlese aus #1123 parste deshalb an derselben mise-Zeile
+/// vorbei — gemeldet wurde dann „geschrieben, aber nicht wiedergefunden",
+/// obwohl der Eintrag korrekt dastand. Eine Fassung, die nur die halbe Form
+/// kennt, liest sich wie eine, die den Fall abdeckt.
+pub(crate) fn json_ab_erster_klammer(
+    stdout: &[u8],
+) -> Result<serde_json::Value, serde_json::Error> {
     let text = String::from_utf8_lossy(stdout);
     let mut start = 0;
 
     for zeile in text.split_inclusive('\n') {
-        if zeile.trim_start().starts_with('{') {
+        let anfang = zeile.trim_start();
+
+        if anfang.starts_with('{') || anfang.starts_with('[') {
             break;
         }
+
         start += zeile.len();
     }
 
@@ -604,6 +616,24 @@ mod tests {
     fn codex_json_ohne_vorspann() {
         let wert = json_ab_erster_klammer(b"{\"name\": \"y\"}").unwrap();
         assert_eq!(wert["name"], "y");
+    }
+
+    /// #1127: `codex mcp list --json` antwortet mit einer LISTE. Dass der
+    /// Helfer nur `{` kannte, hat auf Bastians Laptop „geschrieben, aber nicht
+    /// wiedergefunden" gemeldet, obwohl der Eintrag korrekt dastand.
+    #[test]
+    fn codex_liste_hinter_mise_zeile() {
+        let stdout = b"mise ~/.config/mise/config.toml tools: codex@0.160.1\n[\n  {\"name\": \"ai-brain\"}\n]\n";
+        let wert = json_ab_erster_klammer(stdout).unwrap();
+
+        assert_eq!(wert[0]["name"], "ai-brain");
+    }
+
+    #[test]
+    fn codex_liste_ohne_vorspann() {
+        let wert = json_ab_erster_klammer(b"[{\"name\": \"z\"}]").unwrap();
+
+        assert_eq!(wert[0]["name"], "z");
     }
 
     use super::*;
