@@ -1,0 +1,11 @@
+[package]
+name = "ai-brain-plattform"
+version = "0.4.2"
+edition = "2021"
+description = "Was Harness und Tray ueber die Plattform wissen muessen: beim Anmelden starten, etwas oeffnen"
+license = "MIT"
+repository = "https://github.com/peppermint-digital/ai-brain-harness"
+
+# Keine. Alles hier ist Dateitext oder ein Aufruf von `launchctl`, `reg.exe`,
+# `xdg-open`, `open` bzw. `cmd /C start`.
+[dependencies]

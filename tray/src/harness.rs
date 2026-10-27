@@ -125,20 +125,15 @@ pub fn abfragen() -> Wissen {
     }
 }
 
-/// Eine Datei oder einen Ordner im Dateimanager bzw. Editor öffnen — je
-/// Plattform mit dem Werkzeug, das es dort gibt.
+/// Eine Datei oder einen Ordner im Dateimanager bzw. Editor öffnen.
+///
+/// Die Plattform-Weiche stand bis zum 27.10.2026 hier. Sie liegt jetzt in
+/// `ai-brain-plattform`, weil der Harness für die Anmeldung (#8949) dieselbe
+/// braucht — und eine zweite Kopie wäre genau der Fall, gegen den es das
+/// Crate gibt. Hier bleibt, dass dem Tray ein fehlgeschlagener Aufruf nichts
+/// tut: Ein Protokoll, das sich nicht öffnet, ist ärgerlich und nicht mehr.
 pub fn oeffnen(pfad: &str) {
-    let (programm, vorab): (&str, &[&str]) = if cfg!(target_os = "macos") {
-        ("open", &[])
-    } else if cfg!(windows) {
-        // `cmd /c start` braucht ein leeres erstes Argument, sonst
-        // verschluckt `start` den Pfad als Fenstertitel.
-        ("cmd", &["/C", "start", ""])
-    } else {
-        ("xdg-open", &[])
-    };
-
-    let _ = Command::new(programm).args(vorab).arg(pfad).spawn();
+    let _ = ai_brain_plattform::oeffnen::jetzt(pfad);
 }
 
 #[cfg(test)]

@@ -922,7 +922,7 @@ enum Abbruch {
 /// Trays und nicht an seiner Stelle. Beide dürfen auf einem Rechner liegen:
 /// Der Tray braucht eine Desktop-Sitzung, der Dienst nicht, und ein Rechner
 /// ohne Leiste soll seine Leitung trotzdem halten.
-const DIENST_AUTOSTART: ai_brain_autostart::Eintrag = ai_brain_autostart::Eintrag {
+const DIENST_AUTOSTART: ai_brain_plattform::Eintrag = ai_brain_plattform::Eintrag {
     label: "de.peppermint.ai-brain-leitung",
     datei: "ai-brain-leitung",
     name: "AI Brain — Leitung",
@@ -932,7 +932,7 @@ const DIENST_AUTOSTART: ai_brain_autostart::Eintrag = ai_brain_autostart::Eintra
 };
 
 fn autostart_ein() -> Result<(), String> {
-    ai_brain_autostart::ein(&DIENST_AUTOSTART)?;
+    ai_brain_plattform::autostart::ein(&DIENST_AUTOSTART)?;
 
     println!("Der Dienst startet ab dem nächsten Anmelden. Jetzt sofort starten:");
     println!("  ai-brain-harness leitung dienst &");
@@ -945,7 +945,7 @@ fn autostart_ein() -> Result<(), String> {
 }
 
 fn autostart_aus() -> Result<(), String> {
-    ai_brain_autostart::aus(&DIENST_AUTOSTART)
+    ai_brain_plattform::autostart::aus(&DIENST_AUTOSTART)
 }
 
 /// Die PID-Datei belegen — eine Leitung je Gerät.
@@ -994,7 +994,7 @@ static STUMME_INSTANZ: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// beseitigt nur den zweiten Schalter, der neben dem Haken stand.
 ///
 /// **Kein systemd-Dienst, sondern der Autostart-Mechanismus** aus
-/// `ai-brain-autostart` (XDG-`.desktop`, LaunchAgent, Run-Key). Die Leitung
+/// `ai-brain-plattform` (XDG-`.desktop`, LaunchAgent, Run-Key). Die Leitung
 /// gehört in die Nutzersitzung — sie spricht mit dem imkr-Server dieses
 /// Nutzers und liest seinen Konfigurationsordner. Ein Systemdienst wäre der
 /// falsche Geltungsbereich, und `systemd --user` gäbe es nur unter Linux.

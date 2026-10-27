@@ -3,10 +3,10 @@
 //! Hier bleibt nur, WAS gestartet werden soll. Die drei Plattform-Wege
 //! (XDG-`.desktop`, LaunchAgent, Windows-Run-Key) standen bis zum 27.10.2026
 //! in dieser Datei; seit der Harness selbst einen Dienst beim Anmelden
-//! startet (#8932), wohnen sie in `ai-brain-autostart` — ein Crate, ein Satz
+//! startet (#8932), wohnen sie in `ai-brain-plattform` — ein Crate, ein Satz
 //! Tests, zwei Aufrufer. Siehe dort, warum nicht abgeschrieben wurde.
 
-use ai_brain_autostart::Eintrag;
+use ai_brain_plattform::Eintrag;
 
 /// Der Tray startet sich selbst, ohne Argumente.
 const TRAY: Eintrag = Eintrag {
@@ -19,11 +19,11 @@ const TRAY: Eintrag = Eintrag {
 };
 
 pub fn ein() -> Result<(), String> {
-    ai_brain_autostart::ein(&TRAY)
+    ai_brain_plattform::autostart::ein(&TRAY)
 }
 
 pub fn aus() -> Result<(), String> {
-    ai_brain_autostart::aus(&TRAY)
+    ai_brain_plattform::autostart::aus(&TRAY)
 }
 
 #[cfg(test)]

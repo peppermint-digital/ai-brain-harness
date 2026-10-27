@@ -17,17 +17,7 @@
 //! aufblitzen lassen. Der Run-Key kostet keine Abhängigkeit, braucht keine
 //! Administratorrechte (HKCU) und zeigt kein Fenster.
 //!
-//! ## Warum ein eigenes Crate (#8932)
-//!
-//! Bis zum 27.10.2026 stand das alles im Tray. Dann bekam der Harness selbst
-//! einen Dienst, der beim Anmelden starten soll ([`Eintrag`] mit Argumenten),
-//! und damit gab es zwei Nutzer für dieselben drei Mechanismen.
-//!
-//! Abschreiben wäre der kürzere Weg gewesen und hätte an genau der
-//! gefährlichen Stelle gedriftet: Die beiden unterscheiden sich nur in Label,
-//! Dateiname und Argumenten — Kleinigkeiten, die man beim Kopieren anpasst,
-//! während eine Korrektur am Windows-Run-Key später nur in einer der zwei
-//! Fassungen landet. Also ein Crate, ein Satz Tests, zwei Aufrufer.
+//! Warum das nicht im Tray steht, sondern hier: siehe den Kopf des Crates.
 //!
 //! Die Textbausteine stehen absichtlich plattformunabhängig hier: So lassen
 //! sie sich auf jedem Rechner testen, auch wenn der Pfad daneben nur unter
