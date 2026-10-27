@@ -184,6 +184,11 @@ Optionen für `connect`:
 /// `configure-claude` bleibt als Zweitname bestehen — der Befehl stand so in
 /// der README, und wer ihn sich notiert hat, soll nicht ins Leere laufen.
 fn configure_tools() -> Result<(), String> {
+    // Hier bricht der Riegel ab, anders als im Assistenten: Einträge
+    // schreiben IST der ganze Zweck dieses Befehls. Bliebe er stehen und täte
+    // nichts, wäre das die schlechtere Antwort.
+    config::riegel_bauverzeichnis()?;
+
     // Erst prüfen, ob überhaupt eine Verbindung existiert: sonst schreiben wir
     // einen MCP-Eintrag, der beim Start sofort scheitert.
     let connection = config::load()?;

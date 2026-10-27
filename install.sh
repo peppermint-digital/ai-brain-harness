@@ -353,6 +353,20 @@ tray_signatur_hinweis() {
     say "  oder: Systemeinstellungen → Datenschutz & Sicherheit → \"Dennoch oeffnen\""
 }
 
+# Kennt das installierte Programm den Einrichtungsassistenten? (#8949)
+#
+# Die Sonde statt einer Versionspruefung: Eine Zahl zu vergleichen heisst,
+# zwei Stellen gleichzeitig zu pflegen. Was das Programm kann, sagt es selbst.
+# Dasselbe Muster wie bei `leitung dienst` weiter unten.
+#
+# Kennt es ihn, uebernimmt er die beiden Fragen (Tray-Autostart,
+# Leitungsdienst) und verbindet und gleicht ausserdem ab. Kennt er ihn nicht —
+# ein Rechner, der eine aeltere Fassung behaelt —, bleibt alles wie vorher.
+assistent_da() {
+    "$INSTALL_DIR/$BIN_NAME" einrichten --help 2>/dev/null \
+        | grep -q "ai-brain-harness einrichten"
+}
+
 tray_anbieten() {
     tray_erwuenscht || return 0
 
@@ -368,6 +382,15 @@ tray_anbieten() {
     say "Tray installiert: $INSTALL_DIR/$TRAY_NAME"
 
     tray_signatur_hinweis
+
+    # Kennt das Programm den Assistenten, fragt ER nach dem Autostart — und
+    # zwar in derselben Reihe wie nach dem Leitungsdienst. Zwei Fragen aus
+    # einer Quelle statt zwei aus zweien.
+    if assistent_da; then
+        say ""
+        say "Autostart und Einrichtung macht gleich der Assistent."
+        return 0
+    fi
 
     # „Nur auf Nachfrage" heisst: ein Mensch sagt ja.
     #
@@ -427,6 +450,10 @@ tray_anbieten() {
 # eingerichtet. Ein Dienst, der eine Leitung zu einem fremden Rechner oeffnet,
 # ist das Letzte, was man ungefragt aufsetzt.
 leitung_anbieten() {
+    # Kennt das Programm den Assistenten, fragt er — zusammen mit dem Tray
+    # und im selben Durchlauf, in dem er auch verbindet und abgleicht.
+    assistent_da && return 0
+
     say ""
     say "Live-Leitung: Damit ein Channel-Agent (z. B. dein Avatar) die Fenster"
     say "dieses Rechners sehen kann, muss die Leitung zu AI Brain stehen."
@@ -552,6 +579,40 @@ say ""
 say "Installiert: $INSTALL_DIR/$BIN_NAME"
 say ""
 
+# ------------------------------------------------------------- Assistent ----
+
+# Kennt das Programm `einrichten`, macht es von hier an alles selbst: verbinden
+# (bzw. ueberspringen, wenn schon verbunden), abgleichen, MCP eintragen,
+# Leitung und Tray anbieten — und am Ende eine Zusammenfassung, die MISST.
+#
+# ## Warum < /dev/tty und nicht einfach aufrufen
+#
+# Dieses Skript laeuft ueber `curl | sh`. Die Standardeingabe ist dann die
+# Leitung MIT DEM SKRIPT DARIN, nicht die Tastatur. Der Assistent nimmt bei
+# fehlendem Terminal „ja" an — das ist dort richtig, wo jemand ihn selbst
+# aufruft (eine Bereitstellung soll nicht haengen), und hier faellt es in die
+# falsche Richtung: Es waere ungefragt eingerichtet, obwohl ein Mensch
+# daneben sitzt.
+#
+# Mit `< /dev/tty` bekommt er die Tastatur und fragt. Gibt es kein Terminal,
+# wird er GAR NICHT gestartet: Dann wuerde er auf eine Bestaetigung im Browser
+# warten, die niemand geben kann, bis der Geraetecode verfaellt.
+if assistent_da; then
+    say ""
+
+    if (exec 3< /dev/tty) 2>/dev/null; then
+        "$INSTALL_DIR/$BIN_NAME" einrichten < /dev/tty || \
+            say "Die Einrichtung ist nicht durchgelaufen — oben steht, wo."
+    else
+        say "Kein Terminal — die Einrichtung wurde nicht gestartet."
+        say "Spaeter in einer Shell:  $BIN_NAME einrichten"
+    fi
+
+    exit 0
+fi
+
+# Von hier an der Weg fuer eine Fassung ohne Assistenten.
+#
 # Dieses Skript ist auch der Update-Weg. Wer schon verbunden ist, braucht KEIN
 # `connect` — das legte einen zweiten Geraetezugang an: derselbe Rechner zweimal
 # unter „Meine Geraete", der neue mit der Grundausstattung statt der gepflegten

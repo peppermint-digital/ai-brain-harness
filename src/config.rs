@@ -382,24 +382,9 @@ pub fn write_claude_config() -> Result<PathBuf, String> {
 /// sieht in der Datei richtig aus und ist tot. Genau das lag am 15.10.2026 auf
 /// Laptop und Desktop ({@link EIGENE_NAMEN}).
 pub fn claude_hat_eintrag() -> bool {
-    let Ok(pfad) = claude_config_path() else {
-        return false;
-    };
-
-    let Ok(roh) = fs::read_to_string(&pfad) else {
-        return false;
-    };
-
-    let Ok(wert) = serde_json::from_str::<serde_json::Value>(&roh) else {
-        return false;
-    };
-
-    wert
-        .get("mcpServers")
-        .and_then(|s| s.get("ai-brain"))
-        .and_then(|e| e.get("command"))
-        .and_then(|c| c.as_str())
-        .is_some_and(ist_unser_programm)
+    claude_config_path()
+        .map(|p| datei_hat_eintrag(&p.to_string_lossy()))
+        .unwrap_or(false)
 }
 
 // ----------------------------------------------------------------- codex ----
@@ -531,6 +516,174 @@ pub fn imkr_konten_versorgen() -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(&ergebnis.stdout).trim().to_string()))
 }
 
+/// Läuft gerade ein Programm aus dem Bauverzeichnis? (#8949)
+///
+/// ## Warum es diesen Riegel gibt — der Vorfall vom 27.10.2026
+///
+/// Beim Bauen des Einrichtungsassistenten habe ich ihn auf diesem Rechner mit
+/// echtem `HOME` laufen lassen, damit imkr seine Konten findet. Ergebnis:
+/// `~/.claude.json`, `~/.codex/config.toml` und alle drei imkr-Konten zeigten
+/// danach auf `target/debug/ai-brain-harness` statt auf das installierte
+/// Programm — und `~/.pi/agent/mcp.json` lag neu da, wo vorher keine Datei war.
+///
+/// Das ist nicht „Pech beim Testen". Es ist die eingebaute Folge davon, dass
+/// der MCP-Eintrag {@link std::env::current_exe} nimmt, und die ist richtig:
+/// Der Eintrag soll auf **dieses** Programm zeigen. Nur ist „dieses Programm"
+/// beim Entwickeln ein anderes als beim Benutzen.
+///
+/// Der Schaden ist still: Die Datei sieht richtig aus, der Pfad existiert
+/// sogar — bis `cargo clean` läuft oder der Zweig wechselt. Dann ist AI Brain
+/// in Claude Code weg, und niemand verbindet das mit einem Testlauf von vor
+/// drei Tagen. Genau diese Form hatte schon der Befund vom 15.10.2026
+/// ({@link EIGENE_NAMEN}): ein Eintrag, der richtig aussieht und ins Leere
+/// zeigt.
+///
+/// Deshalb: Wer aus dem Bauverzeichnis schreibt, muss es ausdrücklich wollen.
+///
+/// `AI_BRAIN_HARNESS_AUS_DEM_BAUM=1` hebt den Riegel auf — für den
+/// berechtigten Fall, nämlich einen Lauf in einem eigenen `HOME`, wo nichts
+/// Echtes getroffen wird.
+pub fn aus_dem_bauverzeichnis() -> Option<PathBuf> {
+    if std::env::var_os("AI_BRAIN_HARNESS_AUS_DEM_BAUM").is_some() {
+        return None;
+    }
+
+    let eigenes = std::env::current_exe().ok()?;
+
+    ist_bauverzeichnis(&eigenes).then_some(eigenes)
+}
+
+/// Liegt dieser Pfad in `target/debug` oder `target/release`?
+///
+/// Rein, damit die Erkennung ohne einen echten Prozess prüfbar ist. Geprüft
+/// wird das ELTERNPAAR und nicht ein Pfadanfang: Ein fester Anfang gälte nur
+/// für dieses Arbeitsverzeichnis, und `CARGO_TARGET_DIR` kann überall liegen.
+fn ist_bauverzeichnis(pfad: &std::path::Path) -> bool {
+    let Some(eltern) = pfad.parent() else {
+        return false;
+    };
+
+    let Some(name) = eltern.file_name() else {
+        return false;
+    };
+
+    if !matches!(name.to_string_lossy().as_ref(), "debug" | "release") {
+        return false;
+    }
+
+    // Noch eine Ebene höher muss `target` stehen — sonst wäre jedes
+    // Verzeichnis namens „release" betroffen.
+    eltern
+        .parent()
+        .and_then(|g| g.file_name())
+        .is_some_and(|n| n.to_string_lossy() == "target")
+}
+
+/// Der Riegel als Fehler, mit dem Weg hinaus.
+pub fn riegel_bauverzeichnis() -> Result<(), String> {
+    let Some(eigenes) = aus_dem_bauverzeichnis() else {
+        return Ok(());
+    };
+
+    // Zeilenweise zusammengesetzt und nicht als eine lange Zeichenkette mit
+    // Fortsetzungen: Die fressen zwar den Umbruch, aber die Einrueckung des
+    // Quelltextes landet im Text — beim ersten Versuch stand die Meldung mit
+    // neun Leerzeichen Einzug auf dem Schirm.
+    let zeilen = [
+        "Dieses Programm läuft aus dem Bauverzeichnis:".to_string(),
+        format!("  {}", eigenes.display()),
+        String::new(),
+        "Ein MCP-Eintrag würde auf diesen Pfad zeigen. Der verschwindet beim".to_string(),
+        "nächsten `cargo clean` oder Zweigwechsel — und dann ist AI Brain in".to_string(),
+        "deinen Werkzeugen still weg, während der Eintrag richtig aussieht.".to_string(),
+        String::new(),
+        "Nimm das installierte Programm:".to_string(),
+        "  ai-brain-harness einrichten".to_string(),
+        String::new(),
+        "Zum Prüfen in einem eigenen HOME:".to_string(),
+        "  AI_BRAIN_HARNESS_AUS_DEM_BAUM=1 …".to_string(),
+    ];
+
+    Err(zeilen.join("\n"))
+}
+
+/// Je imkr-Konto: trägt sein `.claude.json` unseren Eintrag? (#8949)
+///
+/// `None` heisst **keine Auskunft** — kein imkr, oder eines vor v0.21.76, das
+/// `account ls --json` noch nicht kennt. Das ist etwas anderes als eine leere
+/// Liste („es gibt keine Konten"), und die Zusammenfassung muss es
+/// unterscheiden: Sonst behauptet sie „keine Konten", wo sie nur nicht
+/// nachgesehen hat. Dasselbe Muster wie bei der Freigabe-Auskunft (#8932).
+///
+/// **Geprüft wird das `.claude.json` DES KONTOS, nicht unser `~/.claude.json`.**
+/// Dass der Eintrag in der einen Wahrheit steht, hat `imkr account sync` noch
+/// nicht in die Konten getragen — und genau das will die Zeile beantworten.
+///
+/// Der Pfad kommt aus imkrs eigener Auskunft (`claude_json`) und nicht aus
+/// einem nachgebauten Pfad: Wo imkr seine Konten ablegt, gehört imkr. Beim
+/// Standardkonto zeigt er auf `~/.claude.json` — dieselbe Datei, die wir
+/// schreiben, und das ist richtig so.
+///
+/// @return (Kontoname, Eintrag vorhanden) je claude-Konto
+pub fn imkr_konten_stand() -> Option<Vec<(String, bool)>> {
+    which("imkr")?;
+
+    let ausgabe = std::process::Command::new("imkr")
+        .args(["account", "ls", "--json"])
+        .output()
+        .ok()?;
+
+    if !ausgabe.status.success() {
+        return None;
+    }
+
+    let liste: Vec<serde_json::Value> =
+        serde_json::from_slice(&ausgabe.stdout).ok()?;
+
+    let mut stand = Vec::new();
+
+    for konto in liste {
+        // Nur claude: Codex führt kein `.claude.json`, und `claude_json` ist
+        // dort `null`.
+        if konto.get("tool").and_then(|t| t.as_str()) != Some("claude") {
+            continue;
+        }
+
+        let name = konto
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("(ohne Namen)")
+            .to_string();
+
+        let drin = konto
+            .get("claude_json")
+            .and_then(|p| p.as_str())
+            .is_some_and(datei_hat_eintrag);
+
+        stand.push((name, drin));
+    }
+
+    Some(stand)
+}
+
+/// Trägt diese `.claude.json` unseren MCP-Eintrag, und zeigt er auf uns?
+fn datei_hat_eintrag(pfad: &str) -> bool {
+    let Ok(roh) = fs::read_to_string(pfad) else {
+        return false;
+    };
+
+    let Ok(wert) = serde_json::from_str::<serde_json::Value>(&roh) else {
+        return false;
+    };
+
+    wert
+        .get("mcpServers")
+        .and_then(|s| s.get("ai-brain"))
+        .and_then(|e| e.get("command"))
+        .and_then(|c| c.as_str())
+        .is_some_and(ist_unser_programm)
+}
+
 /// Liegt dieses Programm im PATH?
 fn which(name: &str) -> Option<PathBuf> {
     let pfad = std::env::var_os("PATH")?;
@@ -543,6 +696,32 @@ fn which(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Der Riegel aus #8949 — an Pfaden, nicht am laufenden Prozess.
+    ///
+    /// Geprüft wird die Erkennung, nicht `current_exe`: Die hängt davon ab,
+    /// wie der Test selbst gebaut wurde, und ein Test, dessen Ergebnis vom
+    /// Bauort abhängt, prüft den Bauort.
+    #[test]
+    fn das_bauverzeichnis_wird_an_target_erkannt() {
+        let faelle: [(&str, bool); 7] = [
+            ("/pfad/target/debug/ai-brain-harness", true),
+            ("/pfad/target/release/ai-brain-harness", true),
+            // Abweichendes CARGO_TARGET_DIR: zählt das Elternpaar, nicht der
+            // Anfang des Pfades.
+            ("/woanders/ganz/target/debug/ai-brain-harness", true),
+            ("/home/x/.local/bin/ai-brain-harness", false),
+            ("/usr/local/bin/ai-brain-harness", false),
+            // „release" allein genügt NICHT — sonst wäre jedes Verzeichnis
+            // mit diesem Namen betroffen.
+            ("/opt/release/ai-brain-harness", false),
+            ("/opt/debug/ai-brain-harness", false),
+        ];
+
+        for (pfad, erwartet) in faelle {
+            assert_eq!(ist_bauverzeichnis(std::path::Path::new(pfad)), erwartet, "{pfad}");
+        }
+    }
 
     /// Bewusst EIN Test statt mehrerer: Umgebungsvariablen gehören dem ganzen
     /// Prozess, und Rust lässt Tests nebenläufig laufen. Getrennte Tests würden

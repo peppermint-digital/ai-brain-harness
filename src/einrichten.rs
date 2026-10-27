@@ -139,7 +139,23 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
     abgleichen(&mut bericht);
 
     schritt(3, "MCP-Eintrag in den Werkzeugen");
-    werkzeuge(&mut bericht);
+
+    // Der Riegel steht VOR Schritt 3 und bricht nicht ab: Die Verbindung und
+    // der Abgleich sind da, und die Zusammenfassung soll sagen, was fehlt.
+    // Siehe {@link config::riegel_bauverzeichnis} für den Vorfall dahinter.
+    match config::riegel_bauverzeichnis() {
+        Ok(()) => werkzeuge(&mut bericht),
+        Err(grund) => {
+            println!("{grund}");
+
+            let hinweis = "übersprungen (Lauf aus dem Bauverzeichnis)".to_string();
+
+            bericht.claude = hinweis.clone();
+            bericht.codex = hinweis.clone();
+            bericht.pi = hinweis.clone();
+            bericht.imkr = hinweis;
+        }
+    }
 
     schritt(4, "Erinnerungen");
     bericht.erinnerungen = match erinnerungen::abgleichen(&[]) {
@@ -275,10 +291,47 @@ fn werkzeuge(bericht: &mut Bericht) {
     bericht.imkr = match config::imkr_konten_versorgen() {
         Ok(Some(_)) => {
             println!("imkr-Konten : über „imkr account sync“ verteilt");
-            // Bewusst ohne Zusage je Konto: Dafür müsste man die Konten
-            // aufzählen, und `imkr account ls` liefert nur Prosa. Siehe die
-            // offene Frage in der Session-Notiz zu #8949.
-            "verteilt (je Konto nicht nachgelesen)".to_string()
+
+            // NACH dem Verteilen nachlesen, nicht davor — sonst prüfte man
+            // den Stand, den man gerade ändern wollte.
+            //
+            // `None` heisst „keine Auskunft": imkr vor v0.21.76 kennt
+            // `account ls --json` nicht. Das ist etwas anderes als „keine
+            // Konten", und die Zeile sagt beides getrennt.
+            match config::imkr_konten_stand() {
+                Some(konten) if konten.is_empty() => {
+                    println!("              keine claude-Konten vorhanden");
+                    "verteilt, keine claude-Konten".to_string()
+                }
+                Some(konten) => {
+                    for (name, drin) in &konten {
+                        println!(
+                            "              {name}: {}",
+                            if *drin { "Eintrag drin" } else { "Eintrag FEHLT" }
+                        );
+                    }
+
+                    let fehlen: Vec<&str> = konten
+                        .iter()
+                        .filter(|(_, drin)| !drin)
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+
+                    if fehlen.is_empty() {
+                        format!("{}, Eintrag überall drin", konten_wort(konten.len()))
+                    } else {
+                        format!(
+                            "{}, Eintrag fehlt bei: {}",
+                            konten_wort(konten.len()),
+                            fehlen.join(", ")
+                        )
+                    }
+                }
+                None => {
+                    println!("              je Konto nicht nachlesbar (imkr vor v0.21.76)");
+                    "verteilt (je Konto nicht nachgelesen)".to_string()
+                }
+            }
         }
         Ok(None) => {
             println!("imkr-Konten : imkr nicht installiert, übersprungen");
@@ -289,6 +342,16 @@ fn werkzeuge(bericht: &mut Bericht) {
             format!("nicht verteilt: {}", kurz(&grund))
         }
     };
+}
+
+/// „1 Konto" statt „1 Konten". Eine Zeile, die falsch beugt, liest sich wie
+/// eine, die niemand gelesen hat.
+fn konten_wort(n: usize) -> String {
+    if n == 1 {
+        "1 Konto".to_string()
+    } else {
+        format!("{n} Konten")
+    }
 }
 
 /// Lange Fehlertexte für die Zusammenfassung kürzen.
@@ -483,6 +546,13 @@ mod tests {
         assert!(k.contains("ganzer Text oben"), "{k}");
         // Der Anfang bleibt lesbar — er sagt, WORAN es lag.
         assert!(k.starts_with("Token nicht erhältlich"), "{k}");
+    }
+
+    #[test]
+    fn ein_konto_ist_kein_konten() {
+        assert_eq!(konten_wort(1), "1 Konto");
+        assert_eq!(konten_wort(3), "3 Konten");
+        assert_eq!(konten_wort(0), "0 Konten");
     }
 
     #[test]
