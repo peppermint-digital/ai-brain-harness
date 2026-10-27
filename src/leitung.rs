@@ -3132,7 +3132,11 @@ pub fn sitzungen_filtern(roh: &str) -> Result<String, String> {
             .map(|p| p.iter().map(|e| pane_gefiltert(&name, e)).collect())
             .unwrap_or_default();
 
-        m.insert("fenster_panes".into(), panes.into());
+        // `pane_liste` und nicht `fenster_panes`: Daneben steht `panes` als
+        // ZAHL, und „fenster_panes" liest sich wie „Panes je Fenster" — eine
+        // Gruppierung, die es hier nicht gibt. Die Liste ist flach, jeder
+        // Eintrag nennt sein Fenster selbst.
+        m.insert("pane_liste".into(), panes.into());
 
         sitzungen.push(serde_json::Value::Object(m));
     }
@@ -3523,7 +3527,7 @@ mod tests {
         assert_eq!(s0["panes"], 2);
         assert_eq!(s0["agenten"]["working"], 1);
 
-        let p0 = &s0["fenster_panes"][0];
+        let p0 = &s0["pane_liste"][0];
         // Die Adresse steht fertig da — genau die Form, die imkr-lesen will.
         assert_eq!(p0["adresse"], "imkr/3");
         assert_eq!(p0["programm"], "claude");
@@ -3535,8 +3539,8 @@ mod tests {
 
         // Auch eine Shell ohne Agent wird aufgeführt: Ein Befehl soll dort
         // laufen können, und ohne Adresse findet sie niemand.
-        assert_eq!(s0["fenster_panes"][1]["adresse"], "imkr/0");
-        assert_eq!(s0["fenster_panes"][1]["zustand"], "");
+        assert_eq!(s0["pane_liste"][1]["adresse"], "imkr/0");
+        assert_eq!(s0["pane_liste"][1]["zustand"], "");
     }
 
     #[test]
@@ -3569,7 +3573,7 @@ mod tests {
         assert_eq!(v["sitzungen"][0]["ruht"], "stopped");
         // Keine Adressen: Dort ist nichts zu lesen, und erfundene Adressen
         // wären Arbeit, die ins Leere läuft.
-        assert_eq!(v["sitzungen"][0]["fenster_panes"].as_array().unwrap().len(), 0);
+        assert_eq!(v["sitzungen"][0]["pane_liste"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -3615,7 +3619,7 @@ mod tests {
         );
 
         let v: serde_json::Value = serde_json::from_str(&gefiltert).unwrap();
-        let panes = v["sitzungen"][0]["fenster_panes"].as_array().unwrap();
+        let panes = v["sitzungen"][0]["pane_liste"].as_array().unwrap();
 
         assert_eq!(panes.len(), 2);
         assert_eq!(panes[0]["adresse"], "avatar-imkr/0");

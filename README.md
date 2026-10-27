@@ -937,11 +937,11 @@ bleibt strikt lokal, und eine Freigabe gilt für **diesen** Rechner.
 
 **`sitzungen` schickt keine Bildschirminhalte.** `imkr ls --json` legt zu einem
 wartenden Agenten ein `tail` bei — den unteren Rand seines Bildschirms. Der
-Harness projiziert die Antwort deshalb auf eine **Positivliste**: Pro Pane
-gehen `adresse` (`sitzung/nummer`, genau die Form, die `lesen` und `befehl`
-erwarten), `fenster`, `fenster_name`, `programm`, `zustand`, `seit`, `meta`
-und `titel` heraus, pro Sitzung Name, Fenster- und Pane-Zahl, die
-Zustandszählung und `ruht`. Alles andere nicht.
+Harness projiziert die Antwort deshalb auf eine **Positivliste**: Pro Sitzung
+Name, Fenster- und Pane-Zahl, die Zustandszählung, `ruht` und die flache
+`pane_liste`; pro Pane darin `adresse` (`sitzung/nummer`, genau die Form, die
+`lesen` und `befehl` erwarten), `pane`, `fenster`, `fenster_name`, `programm`,
+`zustand`, `seit`, `meta` und `titel`. Alles andere nicht.
 
 Positivliste und nicht ein Verbot von `tail`: Beides wirkt heute gleich, der
 Unterschied kommt mit der nächsten imkr-Fassung. Legt die ein Feld dazu — eine
