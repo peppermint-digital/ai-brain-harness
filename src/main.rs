@@ -41,6 +41,7 @@ mod leitung;
 mod maske;
 mod mcp;
 mod mcp_eintraege;
+mod meldung;
 mod nachricht;
 mod pairing;
 mod pusher;
@@ -84,6 +85,12 @@ Aufrufe:
   ai-brain-harness nachricht ..       Nachrichten zwischen imkrs:
                                   kontakte | senden <person> <text> |
                                   abholen | bestaetigen <nummer>
+  ai-brain-harness meldung ..         imkr-Ereignisse im gemeinsamen Posteingang:
+                                  senden --art <blocked|done|failed|account|
+                                  message> --rechner <r> --sitzung <s>
+                                  --pane <n> [--fenster <n>] [--agent <name>]
+                                  [--link <url>] <titel> (Text auf stdin) |
+                                  gelesen [--json] | bestaetigen <nummer>
   ai-brain-harness freigabe [...]     Verzeichnisse fuer Laeufe mit mehr Rechten
   ai-brain-harness leitung [...]      Live-Leitung: ein imkr-Pane in AI Brain zeigen
                                   (an [--dauer 30m] | aus | status), Standard aus
@@ -239,6 +246,7 @@ fn main() -> ExitCode {
         Some("auftrag") => auftrag::annehmen(&args[1..]),
         Some("auftrag-melden") => auftrag::nachmelden(&args[1..]),
         Some("nachricht") => nachricht::fuehren(&args[1..]),
+        Some("meldung") => meldung::fuehren(&args[1..]),
         Some("logs") => register::protokoll_zeigen(&args[1..]),
         Some("stop") => register::stoppen(&args[1..]),
         Some("status") => config::print_status(),

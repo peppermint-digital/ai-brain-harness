@@ -87,7 +87,10 @@ pub fn fuehren(args: &[String]) -> Result<(), String> {
 /// Gibt den Wert und die beiden verbrauchten Stellen zurück, damit der
 /// Aufrufer sie nicht als Text mitzählt — sonst landete „--ziel" in der
 /// Nachricht.
-fn flagge(args: &[String], name: &str) -> Option<(String, usize)> {
+///
+/// Auch von [`crate::meldung`] benutzt: Eine zweite Umsetzung derselben Regel
+/// ist eine zweite, die abweichen kann.
+pub(crate) fn flagge(args: &[String], name: &str) -> Option<(String, usize)> {
     let pos = args.iter().position(|a| a == name)?;
     let wert = args.get(pos + 1)?;
 
