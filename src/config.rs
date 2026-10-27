@@ -224,6 +224,24 @@ pub fn disconnect() -> Result<(), String> {
     Ok(())
 }
 
+/// Wo Claude Codes Konfiguration liegt — und warum NICHT `CLAUDE_CONFIG_DIR`.
+///
+/// Immer `~/.claude.json`, auch wenn `CLAUDE_CONFIG_DIR` gesetzt ist. Das war
+/// bis zum 27.10.2026 keine Entscheidung, sondern nur so gebaut; seit #8949
+/// ist es eine, und deshalb steht sie hier.
+///
+/// Auf Bastians Rechnern ist `CLAUDE_CONFIG_DIR` ausschliesslich **in
+/// imkr-Panes** gesetzt und zeigt dort auf das Konto des Panes
+/// (`~/.local/state/imkr/accounts/claude/<name>/`); in keiner Shell-Startdatei
+/// steht es. Gemessen am 27.10.2026 auf Laptop und codingmachine.
+///
+/// Würden wir ihm folgen, schrieben wir den MCP-Eintrag in ein Kontoverzeichnis
+/// — und `imkr account sync` ersetzt dort die ganze `mcpServers`-Struktur mit
+/// der aus `~/.claude.json`. Der Eintrag wäre beim nächsten Abgleich weg, und
+/// zwar still. Begründung ausführlich an {@link imkr_konten_versorgen}.
+///
+/// **Wer das später „korrigiert", baut genau diesen Fehler ein.** Der Weg zu
+/// den Konten führt über imkr, nicht über diese Funktion.
 pub fn claude_config_path() -> Result<PathBuf, String> {
     Ok(heimat()?.join(".claude.json"))
 }
@@ -392,6 +410,93 @@ pub fn write_codex_config() -> Result<Option<String>, String> {
     }
 
     Ok(Some("codex".to_string()))
+}
+
+// -------------------------------------------------------------------- pi ----
+
+/// Traegt den MCP-Server in `pi` ein — ueber dessen eigenes Werkzeug (#8949).
+///
+/// Dieselbe Form wie bei Codex, und aus demselben Grund: `pi mcp add <name>
+/// -- <befehl> <args>` kennt sein eigenes Dateiformat
+/// (`~/.pi/agent/mcp.json`). Wer es von Hand schreibt, uebernimmt die Pflege
+/// eines Formats, das ihm nicht gehoert.
+///
+/// Fehlt `pi`, ist das kein Fehler, sondern der Normalfall.
+pub fn write_pi_config() -> Result<Option<String>, String> {
+    if which("pi").is_none() {
+        return Ok(None);
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("Eigener Programmpfad nicht ermittelbar: {e}"))?;
+
+    let pfad = executable.to_string_lossy().to_string();
+
+    // `add` ersetzt laut eigener Hilfe einen vorhandenen Eintrag („Add or
+    // replace a server in mcp.json"), ein `remove` davor ist also nicht
+    // nötig — anders als bei Codex.
+    let ergebnis = std::process::Command::new("pi")
+        .args(["mcp", "add", "ai-brain", "--", &pfad, "mcp"])
+        .output()
+        .map_err(|e| format!("pi liess sich nicht aufrufen: {e}"))?;
+
+    if !ergebnis.status.success() {
+        let fehler = String::from_utf8_lossy(&ergebnis.stderr);
+
+        return Err(format!("pi mcp add schlug fehl: {}", fehler.trim()));
+    }
+
+    Ok(Some("pi".to_string()))
+}
+
+// ------------------------------------------------------------ imkr-Konten ----
+
+/// Die MCP-Einträge in die imkr-Konten tragen — durch imkr selbst (#8949).
+///
+/// ## Warum NICHT in die Kontoverzeichnisse geschrieben wird
+///
+/// `imkr account` führt je Konto ein eigenes `.claude.json` (unter
+/// `~/.local/state/imkr/accounts/claude/<name>/`), weil die Identität des
+/// angemeldeten Kontos darin steht. Ein MCP-Eintrag in `~/.claude.json`
+/// erreicht diese Konten also nicht von selbst.
+///
+/// Der naheliegende Weg wäre, in jedes Kontoverzeichnis zu schreiben. Das ist
+/// **falsch**, und zwar nachweisbar: `imkr account sync` ruft für jedes Konto
+/// `share_claude_json`, und das macht bei einer bestehenden Kontodatei
+///
+/// ```text
+/// own.insert("mcpServers".into(), servers.clone());
+/// ```
+///
+/// — es ERSETZT die ganze Struktur mit der aus `~/.claude.json`. Ein Eintrag,
+/// den nur das Konto kennt, ist beim nächsten `sync` weg. Still, und bei einem
+/// Konto, das vorher funktionierte.
+///
+/// Also eine Wahrheit (`~/.claude.json`) und ein Verteiler (`imkr account
+/// sync`). Wir sind nicht der zweite Schreiber.
+///
+/// Gilt auch, wenn dieses Programm selbst in einem imkr-Pane läuft: Dort steht
+/// `CLAUDE_CONFIG_DIR` auf das Konto des Panes, und genau diesen Pfad darf
+/// {@link claude_config_path} nicht nehmen. Sie tut es nicht — siehe dort.
+///
+/// Fehlt imkr, gibt es keine Konten zu versorgen.
+pub fn imkr_konten_versorgen() -> Result<Option<String>, String> {
+    if which("imkr").is_none() {
+        return Ok(None);
+    }
+
+    let ergebnis = std::process::Command::new("imkr")
+        .args(["account", "sync"])
+        .output()
+        .map_err(|e| format!("imkr liess sich nicht aufrufen: {e}"))?;
+
+    if !ergebnis.status.success() {
+        let fehler = String::from_utf8_lossy(&ergebnis.stderr);
+
+        return Err(format!("imkr account sync schlug fehl: {}", fehler.trim()));
+    }
+
+    Ok(Some(String::from_utf8_lossy(&ergebnis.stdout).trim().to_string()))
 }
 
 /// Liegt dieses Programm im PATH?

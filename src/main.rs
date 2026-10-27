@@ -201,6 +201,19 @@ fn configure_tools() -> Result<(), String> {
         None => println!("Codex       : nicht installiert, übersprungen"),
     }
 
+    match config::write_pi_config()? {
+        Some(_) => println!("pi          : Eintrag „ai-brain“ angelegt"),
+        None => println!("pi          : nicht installiert, übersprungen"),
+    }
+
+    // Zuletzt, und das ist keine Reihenfolge nach Geschmack: `imkr account
+    // sync` verteilt die mcpServers AUS `~/.claude.json` in die Konten. Vor
+    // dem Schreiben aufgerufen, verteilte es den alten Stand.
+    match config::imkr_konten_versorgen()? {
+        Some(_) => println!("imkr-Konten : über „imkr account sync“ versorgt"),
+        None => println!("imkr-Konten : imkr nicht installiert, übersprungen"),
+    }
+
     println!();
     println!("Starte die Werkzeuge neu, damit die Einträge greifen.");
 
