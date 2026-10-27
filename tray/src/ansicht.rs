@@ -62,10 +62,25 @@ pub struct Lage {
     pub stand: String,
     pub grund: Option<String>,
     pub pane: Option<String>,
+    /// Welche Channels diesen Rechner freigegeben haben (#8932).
+    ///
+    /// Leer heisst „keine Auskunft": ein Harness vor #8932, oder eine von Hand
+    /// eingeschaltete Leitung, die keine braucht.
+    #[serde(default)]
+    pub freigaben: Vec<String>,
 }
 
 /// Was der Tray gerade weiss.
+///
+/// `Da` ist deutlich grösser als die anderen Varianten, und clippy schlägt
+/// deshalb eine `Box` vor. Hier nicht: Von diesem Wert gibt es **genau einen**,
+/// er liegt in der Tray-Zustandsstruktur und wird alle zwei Sekunden ersetzt.
+/// Der Lint zielt auf viele Instanzen — eine Sammlung, eine Warteschlange, ein
+/// Rückgabewert in einer Schleife. Eine Indirektion, die ein paar Dutzend
+/// Bytes auf dem Stack spart und dafür einen `Box` in jeden Mustervergleich
+/// schreibt, macht den Code schlechter lesbar und sonst nichts.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Wissen {
     /// Noch nicht gefragt.
     Unbekannt,
@@ -210,9 +225,16 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
     // `status.an`, und `grund` sagt, warum.
     let leitung = match (status.an, an_bis, status.grund.as_deref()) {
         (true, Some(bis), _) => format!("{LEITUNG_WAS}: an, noch {}", restzeit(bis - jetzt)),
-        (true, None, _) => {
-            format!("{LEITUNG_WAS}: an — automatisch, solange ein Channel diesen Rechner freigegeben hat")
-        }
+        // „Automatisch" allein beantwortet nur die halbe Frage. Die ganze
+        // lautet *wer sieht da mit?* — und wer mehrere Channels hat, liest
+        // „ein Channel" und weiss es nicht. Deshalb stehen die Namen dabei,
+        // sobald der Harness sie liefert.
+        (true, None, _) => match freigaben(status) {
+            Some(wer) => format!("{LEITUNG_WAS}: an — automatisch, Freigabe {wer}"),
+            None => format!(
+                "{LEITUNG_WAS}: an — automatisch, solange ein Channel diesen Rechner freigegeben hat"
+            ),
+        },
         // Abgeschaltet ist etwas anderes als „niemand hat eingeschaltet": Es
         // ist eine Entscheidung, und sie gilt bis zum naechsten Einschalten.
         // Wer das nicht liest, wartet darauf, dass die Leitung von selbst
@@ -246,6 +268,21 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
         farbe,
         gefuellt: status.an,
     }
+}
+
+/// Wer diesen Rechner freigegeben hat, als Aufzählung — oder `None`.
+///
+/// `None` heisst „keine Auskunft", nicht „keiner": Ein Harness vor #8932
+/// liefert das Feld nicht, und dann soll die Zeile ihren alten Satz behalten
+/// statt eine leere Freigabe zu behaupten.
+fn freigaben(status: &Status) -> Option<String> {
+    let liste = &status.lage.as_ref()?.freigaben;
+
+    if liste.is_empty() {
+        return None;
+    }
+
+    Some(liste.join(", "))
 }
 
 /// Die dritte Zeile — und ob sie eine Störung meldet.
@@ -375,6 +412,51 @@ mod tests {
         assert_eq!(a.farbe, Farbe::Gruen);
         assert!(a.gefuellt, "eine stehende Leitung ist gefüllt");
         assert_eq!(a.lage.as_deref(), Some("Verbunden, zeigt avatar-imkr/1"));
+    }
+
+    #[test]
+    fn eine_automatische_leitung_nennt_den_channel() {
+        // Die Frage, die ein Mensch an eine von selbst angegangene Leitung
+        // stellt, ist nicht „warum", sondern „wer sieht mit".
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+                    "lage":{"stand":"verbunden","seit":0,"freigaben":["avatar-1"]},
+                    "verbindung":{"instanz":"AI Brain","geraet":"Bastian Laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(
+            a.leitung.contains("an — automatisch, Freigabe avatar-1"),
+            "{}",
+            a.leitung
+        );
+    }
+
+    #[test]
+    fn mehrere_channels_stehen_alle_da() {
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+                    "lage":{"stand":"verbunden","seit":0,"freigaben":["avatar-1","werkstatt"]},
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(a.leitung.contains("Freigabe avatar-1, werkstatt"), "{}", a.leitung);
+    }
+
+    #[test]
+    fn ohne_namen_bleibt_der_alte_satz_stehen() {
+        // Ein Harness vor #8932 liefert das Feld nicht. Dann soll die Zeile
+        // nicht „Freigabe " mit nichts dahinter behaupten.
+        let a = ansicht(
+            &da(r#"{"an":true,"bis":null,"grund":"automatisch","prozess":4242,
+                    "lage":{"stand":"verbunden","seit":0},
+                    "verbindung":{"instanz":"AI Brain","geraet":"laptop","basis":"https://x"}}"#),
+            0,
+        );
+
+        assert!(a.leitung.contains("solange ein Channel"), "{}", a.leitung);
+        assert!(!a.leitung.contains("Freigabe "), "{}", a.leitung);
     }
 
     #[test]

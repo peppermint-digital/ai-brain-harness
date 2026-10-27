@@ -875,9 +875,15 @@ Danach läuft `leitung dienst` ab jedem Anmelden. Er fragt
 
 Steht dort `freigegeben: true`, setzt er `auto` — und die Leitung geht an, ohne
 dass jemand etwas tippt. Steht dort `false`, bleibt sie aus. Solange sie steht,
-bringt **jeder Herzschlag** die Angabe mit (`200 {"freigabe": …}`): Fällt der
-Haken in AI Brain, verschwindet `auto`, und die Leitung legt binnen einer
-Sekunde selbst auf — derselbe Weg wie beim Ablauf des Hand-Schalters.
+bringt **jeder Herzschlag** die Angabe mit (`200 {"freigabe": …, "channels": […]}`):
+Fällt der Haken in AI Brain, verschwindet `auto`, und die Leitung legt binnen
+einer Sekunde selbst auf — derselbe Weg wie beim Ablauf des Hand-Schalters.
+
+Die **Channel-Namen** gehen mit, nicht nur das Ja, und sie kommen auf jedem
+Schlag mit statt nur beim Aufbau: Der Tray zeigt sie (`an — automatisch,
+Freigabe avatar-1`), und ein zweiter Haken, der dazukommt, während die Leitung
+steht, würde die Anzeige sonst still unvollständig machen. „Automatisch an"
+beantwortet nur die halbe Frage; die ganze lautet *wer sieht da mit?*.
 
 **Keine Auskunft ist nicht „nein".** Kein Netz, eine Instanz ohne das Feld, eine
 kaputte Antwort: Dann öffnet die automatische Leitung nicht — und sie legt auch
@@ -986,7 +992,7 @@ ai-brain-tray --pruefen                     # gibt es hier eine Leiste?
 |---|---|
 | `Mit AI Brain verbunden (Gerät …)` | Es liegt ein Gerätezugang vor. |
 | `Live-Leitung (AI Brain sieht deine Panes): an, noch 2 h` | Von Hand, mit Restzeit. |
-| `… : an — automatisch, solange ein Channel diesen Rechner freigegeben hat` | Der Dienst hält sie. |
+| `… : an — automatisch, Freigabe avatar-1` | Der Dienst hält sie, und wer mitsieht. |
 | `… : aus — abgeschaltet, bis du wieder einschaltest` | Jemand hat das Veto gesetzt. |
 | `… : aus` | Niemand hat eingeschaltet, und es gibt keine Freigabe. |
 | `Verbunden, zeigt bau/2` | Wie es der laufenden Leitung geht. |

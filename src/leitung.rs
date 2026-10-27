@@ -648,10 +648,15 @@ const FREIGABE_TAKT: Duration = Duration::from_secs(5 * 60);
 /// ohne Auskunft über den Haken gibt es keinen Anlass.
 ///
 /// Von Hand einschalten geht unabhängig davon weiter.
-fn freigabe_fragen(c: &Connection) -> Option<bool> {
+/// Gibt es eine Freigabe, und von wem? Ein Aufruf für beides.
+///
+/// Vorher waren es zwei: einer für das Ja, einer für die Namen. Zwei Anfragen
+/// für eine Auskunft sind nicht nur doppelte Last — sie können auch
+/// widersprüchliche Antworten liefern, wenn zwischen ihnen ein Haken fällt.
+fn freigabe_fragen(c: &Connection) -> Option<(bool, Vec<String>)> {
     let text = anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP).ok()?;
 
-    freigabe_aus_ich(&text)
+    Some((freigabe_aus_ich(&text)?, channels_aus_ich(&text)))
 }
 
 /// Die Freigabe aus der Antwort von `geraete/ich`.
@@ -678,19 +683,6 @@ pub fn channels_aus_ich(text: &str) -> Vec<String> {
             )
         })
         .unwrap_or_default()
-}
-
-/// Dieselbe Auskunft, aber mit den Channel-Namen — fürs Protokoll.
-///
-/// Ein Schalter, der von allein angeht, und niemand kann sagen weshalb, wird
-/// zu Recht misstraut. Die Namen gehören dem Besitzer dieses Rechners: Eine
-/// Zeile in `channel_geraete` entsteht nur über die Maske, und die zeigt einer
-/// Person ihre eigenen Rechner.
-fn freigabe_channels(c: &Connection) -> Vec<String> {
-    match anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP) {
-        Ok(text) => channels_aus_ich(&text),
-        Err(_) => Vec::new(),
-    }
 }
 
 fn geraet_fragen(c: &Connection) -> Option<String> {
@@ -735,6 +727,17 @@ pub struct Lage {
     /// Das Pane, das gerade gezeigt wird.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+    /// Welche Channels diesen Rechner freigegeben haben (#8932).
+    ///
+    /// **Der Tray zeigt sie, und darum geht es.** „Automatisch an" beantwortet
+    /// nur die halbe Frage; die ganze lautet *wer sieht da mit?*. Wer mehrere
+    /// Channels hat, liest „ein Channel" und weiss es nicht.
+    ///
+    /// Leer heisst „keine Auskunft" und nicht „keiner": Eine Instanz vor
+    /// #8932 schickt die Namen nicht mit, und eine von Hand eingeschaltete
+    /// Leitung braucht sie nicht.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub freigaben: Vec<String>,
 }
 
 static LAGE: Mutex<Option<Lage>> = Mutex::new(None);
@@ -752,6 +755,24 @@ fn lage_stand(stand: &str, grund: Option<&str>) {
 
 fn lage_pane(pane: Option<&str>) {
     lage_aendern(|l| l.pane = pane.map(str::to_string));
+}
+
+/// Wer diesen Rechner freigegeben hat — für die Leiste.
+///
+/// Nur schreiben, wenn sich etwas ändert: Die Datei wird bei jedem Herzschlag
+/// berührt, und ein Umbenennen je Minute ist für eine Angabe, die sich selten
+/// ändert, nur Verschleiss.
+fn lage_freigaben(channels: &[String]) {
+    let gleich = LAGE
+        .lock()
+        .ok()
+        .is_some_and(|g| g.as_ref().is_some_and(|l| l.freigaben == channels));
+
+    if gleich {
+        return;
+    }
+
+    lage_aendern(|l| l.freigaben = channels.to_vec());
 }
 
 fn lage_aendern(f: impl FnOnce(&mut Lage)) {
@@ -1002,12 +1023,12 @@ fn dienst() -> Result<(), String> {
         let freigabe = freigabe_fragen(&connection);
         let vorher = matches!(stand_jetzt(), Stand::Automatisch);
 
-        match freigabe {
-            Some(an) => {
-                auto_setzen(an);
+        match &freigabe {
+            Some((an, channels)) => {
+                auto_setzen(*an);
+                lage_freigaben(channels);
 
-                if an && !vorher {
-                    let channels = freigabe_channels(&connection);
+                if *an && !vorher {
                     melden(&format!(
                         "Freigabe für diesen Rechner: {} — Leitung geht automatisch an.",
                         if channels.is_empty() {
@@ -1041,9 +1062,9 @@ fn dienst() -> Result<(), String> {
         if !schalter_gilt() {
             lage_stand(
                 "wartet",
-                Some(match freigabe {
-                    Some(false) => "kein Channel hat diesen Rechner freigegeben",
-                    Some(true) => "Schalter steht auf aus",
+                Some(match &freigabe {
+                    Some((false, _)) => "kein Channel hat diesen Rechner freigegeben",
+                    Some((true, _)) => "Schalter steht auf aus",
                     None => "AI Brain antwortet nicht",
                 }),
             );
@@ -1921,6 +1942,15 @@ fn freigabe_aus_schlag(antwort: &str) {
     }
 
     auto_setzen(freigabe);
+
+    // Die Namen für die Leiste, und zwar HIER und nicht nur beim Aufbau der
+    // Leitung: Ein zweiter Haken, der dazukommt, während sie steht, macht die
+    // Anzeige sonst still unvollständig — und „wer sieht mit?" ist genau die
+    // Frage, für die sie da ist. Eine Instanz vor #8932 schickt das Feld nicht
+    // mit; dann bleibt die Liste, wie sie war, statt leer zu werden.
+    if let Some(channels) = channels_im_schlag(antwort) {
+        lage_freigaben(&channels);
+    }
 }
 
 /// Was im Rumpf einer Herzschlag-Antwort steht. `None` = keine Aussage.
@@ -1929,6 +1959,23 @@ pub fn freigabe_im_schlag(antwort: &str) -> Option<bool> {
         .ok()?
         .get("freigabe")?
         .as_bool()
+}
+
+/// Die Channel-Namen aus derselben Antwort. `None` = das Feld fehlt.
+///
+/// Der Unterschied zu einer leeren Liste ist der Punkt: Eine Instanz vor
+/// #8932 sagt nichts über die Namen, und dann soll die Anzeige behalten, was
+/// sie hat. Eine leere Liste dagegen heisst „derzeit keine".
+pub fn channels_im_schlag(antwort: &str) -> Option<Vec<String>> {
+    Some(
+        serde_json::from_str::<serde_json::Value>(antwort)
+            .ok()?
+            .get("channels")?
+            .as_array()?
+            .iter()
+            .filter_map(|c| c.as_str().map(str::to_owned))
+            .collect(),
+    )
 }
 
 fn verbieten(endgueltig: &Arc<Mutex<Option<String>>>, grund: &str) {
@@ -4020,6 +4067,25 @@ mod tests {
         assert_eq!(freigabe_aus_ich("keine Antwort"), None);
         assert_eq!(freigabe_aus_ich(r#"{"imkr":null}"#), None);
         assert!(channels_aus_ich(alt).is_empty());
+    }
+
+    #[test]
+    fn der_herzschlag_bringt_auch_die_namen_mit() {
+        let mit = r#"{"freigabe":true,"channels":["avatar-1","werkstatt"]}"#;
+
+        assert_eq!(
+            channels_im_schlag(mit),
+            Some(vec!["avatar-1".to_string(), "werkstatt".to_string()])
+        );
+        // Leere Liste heisst „derzeit keine" …
+        assert_eq!(
+            channels_im_schlag(r#"{"freigabe":false,"channels":[]}"#),
+            Some(vec![])
+        );
+        // … das FEHLENDE Feld heisst „keine Auskunft". Eine Instanz vor #8932
+        // sagt nichts dazu, und dann soll die Leiste behalten, was sie hat.
+        assert_eq!(channels_im_schlag(r#"{"freigabe":true}"#), None);
+        assert_eq!(channels_im_schlag(""), None);
     }
 
     #[test]
