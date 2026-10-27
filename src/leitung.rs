@@ -102,7 +102,7 @@ Der Dienst schaltet die Leitung selbst an, sobald ein Channel diesen Rechner
 in AI Brain freigegeben hat — und wieder aus, sobald die Freigabe faellt.
 Ohne Freigabe bleibt sie aus.
 
-`leitung aus` und der Linksklick im Tray haben Vorrang: Das bleibt aus, bis du
+`leitung aus` und das Haekchen im Tray-Menue haben Vorrang: Das bleibt aus, bis du
 wieder einschaltest, nicht nur bis zum naechsten Herzschlag.
 
 Von Hand eingeschaltet gilt hoechstens 8 h; die automatische Leitung hat keine
@@ -172,8 +172,9 @@ impl Stand {
 /// | nein | nein | ja | [`Stand::Automatisch`] — AN |
 /// | nein | nein | nein | [`Stand::Aus`] |
 ///
-/// **Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und der
-/// Linksklick im Tray schreiben es. Wäre es nur ein gelöschtes `auto`, würde
+/// **Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und das
+/// Häkchen „Live-Leitung" im Tray-Menü schreiben es (bis v0.5.0 war es der
+/// Linksklick auf das Symbol; der öffnet seit #1124 AI Brain). Wäre es nur ein gelöschtes `auto`, würde
 /// die nächste Auskunft von AI Brain es binnen einer Minute wieder setzen —
 /// ein Schalter, der sich selbst zurückstellt, ist kein Schalter. Und ein
 /// Veto mit Ablaufzeit ginge wieder an, wenn niemand hinsieht; wer wieder
@@ -398,6 +399,38 @@ fn an(args: &[String]) -> Result<(), String> {
 ///
 /// Das Veto hat deshalb keine Frist, und `leitung an` ist das Einzige, was es
 /// aufhebt. Siehe die Tabelle an {@see schalter_stand}.
+/// ## Warum hier nicht mehr blind beendet wird (#1125)
+///
+/// Bis v0.5.0 wartete diese Funktion acht Sekunden darauf, dass der Prozess
+/// hinter `leitung.pid` **endet**, und schickte ihm danach SIGTERM. Das war
+/// richtig, solange dieser Prozess eine einzelne Leitung war: Fällt der
+/// Schalter, legt sie auf und ist fertig.
+///
+/// Seit #8932 hält aber der **Dienst** die PID-Datei, und zwar für seine ganze
+/// Lebenszeit — absichtlich, damit `leitung an` keinen zweiten Prozess daneben
+/// startet (siehe {@link dienst}). Er beendet sich auf ein Veto nicht, sondern
+/// legt auf und wartet. Nach acht Sekunden wurde also genau der Dienst
+/// erschossen, den Bastian beim Anmelden gestartet hatte:
+///
+/// ```text
+/// Leitung ist aus (Prozess 3444922 reagierte nicht und wurde beendet).
+/// ```
+///
+/// Danach lief bis zur nächsten Anmeldung kein Dienst mehr, und der Autostart
+/// war für diese Sitzung wirkungslos. Das Veto „hielt" nur noch deshalb, weil
+/// niemand mehr da war, der es hätte brechen können.
+///
+/// **Gefragt wird deshalb nicht mehr „wer bist du", sondern „steht noch eine
+/// Verbindung".** Das ist eine Messung und keine Annahme über die Rolle: Die
+/// Zustandsdatei sagt, was der Halter gerade tut. Ist dort keine Verbindung
+/// offen, gibt es nichts aufzulegen — dann endet dieser Befehl, und der Halter
+/// lebt weiter.
+///
+/// Der Kill bleibt als letzter Ausweg für den Fall, auf den er immer gemünzt
+/// war: Eine Verbindung steht, und der Halter reagiert nicht. Ohne
+/// Zustandsdatei gilt derselbe Weg wie früher — über einen Halter, der nichts
+/// über sich sagt, wissen wir nichts, und eine offene Leitung, die
+/// „wahrscheinlich schon zu ist", wäre die falsche Vermutung.
 fn aus() -> Result<(), String> {
     schalter_aendern(|s| {
         s.bis = 0;
@@ -409,6 +442,19 @@ fn aus() -> Result<(), String> {
         return Ok(());
     };
 
+    let lage = lage_aus_datei();
+
+    // Niemand hat eine Verbindung offen: der Normalfall auf einem Rechner mit
+    // Dienst und ohne Freigabe. Nichts zu beenden, nichts zu warten.
+    if let Some(l) = &lage {
+        if !lage_offen(&l.stand) {
+            println!("Leitung ist aus — und bleibt aus, bis du sie einschaltest.");
+            println!("Es stand keine Verbindung; Prozess {pid} läuft weiter.");
+
+            return Ok(());
+        }
+    }
+
     // Erst die Leitung selbst auflegen lassen: sie sieht den Schalter binnen
     // einer Sekunde fallen, beendet den Tap und schickt den Endemarker. Ein
     // Kill schnitte das ab, und der Browser sähe ein Terminal, das einfriert.
@@ -416,7 +462,19 @@ fn aus() -> Result<(), String> {
 
     while beginn.elapsed() < Duration::from_secs(8) {
         if !prozess_lebt(pid) {
-            println!("Leitung ist aus, Verbindung beendet — und bleibt aus, bis du sie einschaltest.");
+            println!(
+                "Leitung ist aus, Verbindung beendet — und bleibt aus, bis du sie einschaltest."
+            );
+            return Ok(());
+        }
+
+        // Aufgelegt, aber noch da: der Dienst. Das ist das gewünschte
+        // Ergebnis und nicht die Ausnahme — er nimmt ein späteres
+        // `leitung an` ohne neue Anmeldung an.
+        if lage.is_some() && lage_aus_datei().is_some_and(|l| !lage_offen(&l.stand)) {
+            println!("Leitung ist aus, aufgelegt — und bleibt aus, bis du sie einschaltest.");
+            println!("Prozess {pid} läuft weiter und nimmt ein späteres „an“ an.");
+
             return Ok(());
         }
 
@@ -429,6 +487,29 @@ fn aus() -> Result<(), String> {
     println!("Leitung ist aus (Prozess {pid} reagierte nicht und wurde beendet).");
 
     Ok(())
+}
+
+/// Steht hinter diesem Stand noch eine Verbindung, die aufzulegen wäre?
+///
+/// `getrennt` zählt mit: Das heisst „die Verbindung ist weg, ich versuche es
+/// wieder" — ein Halter in diesem Zustand baut gleich wieder auf, und genau
+/// das soll ein Veto verhindern. `wartet` und `abgeschaltet` sind dagegen die
+/// Stände des Dienstes ohne Leitung, `aufgelegt` ist das endgültige Ende.
+///
+/// Rein, damit die Liste ohne Prozess und Datei prüfbar ist.
+fn lage_offen(stand: &str) -> bool {
+    matches!(stand, "verbindet" | "verbunden" | "getrennt")
+}
+
+/// Die Zustandsdatei lesen, ohne sie zu bewerten.
+///
+/// `None` heisst „keine oder keine lesbare Datei" — und das ist etwas anderes
+/// als „keine Verbindung offen". Siehe {@link aus}: Ohne Auskunft bleibt es
+/// beim alten, vorsichtigen Weg.
+fn lage_aus_datei() -> Option<Lage> {
+    let roh = std::fs::read_to_string(ablage(ZUSTAND_DATEI).ok()?).ok()?;
+
+    serde_json::from_str::<Lage>(&roh).ok()
 }
 
 fn status() -> Result<(), String> {
@@ -466,10 +547,7 @@ fn status() -> Result<(), String> {
 /// bleibt. Was ein abgestürzter Prozess zurückliess, zählt nicht.
 fn status_json() -> Result<String, String> {
     let prozess = laufende_pid();
-    let lage = std::fs::read_to_string(ablage(ZUSTAND_DATEI)?)
-        .ok()
-        .and_then(|roh| serde_json::from_str::<Lage>(&roh).ok())
-        .filter(|l| lage_gilt(l, prozess.is_some()));
+    let lage = lage_aus_datei().filter(|l| lage_gilt(l, prozess.is_some()));
 
     let stand = stand_jetzt();
 
@@ -3918,6 +3996,35 @@ mod tests {
 
     fn json(s: &str) -> serde_json::Value {
         serde_json::from_str(s).unwrap()
+    }
+
+    /// #1125: Woran `leitung aus` erkennt, dass es nichts zu beenden gibt.
+    ///
+    /// Die Liste entscheidet darueber, ob ein Prozess SIGTERM bekommt. Sie
+    /// gehoert deshalb festgenagelt — und zwar in beide Richtungen: Ein
+    /// Stand, der faelschlich als „offen" gilt, kostet den Dienst (genau der
+    /// Fehler aus #1125); einer, der faelschlich als „zu" gilt, liesse eine
+    /// Leitung stehen, die jemand abgeschaltet hat.
+    #[test]
+    fn nur_eine_offene_verbindung_ist_eine_offene_verbindung() {
+        // Offen — hier waere wirklich etwas aufzulegen.
+        assert!(lage_offen("verbindet"));
+        assert!(lage_offen("verbunden"));
+        // „getrennt" heisst „weg, ich versuche es wieder" — der Halter baut
+        // gleich erneut auf, und genau das soll das Veto verhindern.
+        assert!(lage_offen("getrennt"));
+
+        // Die Staende des Dienstes OHNE Leitung. Bis v0.5.0 wurde er dafuer
+        // nach acht Sekunden erschossen.
+        assert!(!lage_offen("wartet"));
+        assert!(!lage_offen("abgeschaltet"));
+        // Endgueltig aufgelegt (z. B. 403).
+        assert!(!lage_offen("aufgelegt"));
+
+        // Was wir nicht kennen, ist nicht „offen" — aber ohne Zustandsdatei
+        // bleibt es beim alten, vorsichtigen Weg. Siehe `aus`.
+        assert!(!lage_offen(""));
+        assert!(!lage_offen("irgendwas"));
     }
 
     #[test]
