@@ -198,8 +198,8 @@ Was eine Instanz bereithält, steht unter `https://deine-domain.de/install.json`
 curl -fsSL https://raw.githubusercontent.com/peppermint-digital/ai-brain-harness/main/install.sh | sh
 ```
 
-> ⚠️ Aktuell existiert **kein Release**. Das Skript baut deshalb aus dem
-> Quelltext (siehe unten) — schneller bist du mit dem Weg über deine Instanz.
+> Seit dem 27.10.2026 gibt es Releases (`v*`-Tag → GitHub Actions). Gibt es für
+> deine Plattform keins, baut das Skript aus dem Quelltext (siehe unten).
 
 Holt das gebaute Programm aus dem letzten Release, legt es nach `~/.local/bin`
 und trägt das Verzeichnis in `~/.zshrc` und `~/.bashrc` ein, falls es dort noch
@@ -850,7 +850,38 @@ cargo build --release -p ai-brain-tray
 ai-brain-tray --autostart                   # beim Anmelden starten
 ```
 
-Auf einem Rechner ohne Bildschirm (codingmachine) gehört er nicht hin.
+#### Er kommt mit der Installation — aber nicht überall
+
+`install.sh` bringt ihn mit, und zwar nur dort, wo er etwas anzeigen kann:
+
+- **Linux.** ksni spricht StatusNotifierItem über D-Bus; unter macOS und Windows
+  gibt es das nicht. Ein Tray dort wäre ein eigenes Programm und bräuchte eine
+  Signatur — diese Entscheidung steht noch aus.
+- **Eine Desktop-Sitzung mit Leiste.** Geprüft wird beides:
+  `DBUS_SESSION_BUS_ADDRESS` *und* ein `org.kde.StatusNotifierWatcher` auf dem
+  Sitzungsbus. Ohne Bus findet der Tray niemanden; ohne Watcher startet er und
+  bleibt **unsichtbar** — der unangenehmere Fall, weil nichts darauf hinweist.
+- **Nie auf der codingmachine.** Dort läuft AI Brain selbst. Sie *hat* eine
+  Desktop-Sitzung, die Prüfung darüber fängt sie also nicht ab; es braucht einen
+  eigenen Riegel. Erkannt wird sie am Benutzernamen und am imkr-Namen, **nicht
+  am Hostnamen**: der lautet `omarchy` und damit genauso wie auf jedem anderen
+  Omarchy-Rechner.
+
+Der Autostart wird **gefragt**, nicht gesetzt. Und gefragt wird über `/dev/tty`,
+nicht über die Standardeingabe: Das Skript läuft über `curl | sh`, dort ist die
+Standardeingabe die Leitung mit dem Skript darin — ein `read` würde das Skript
+anfressen. Gibt es kein Terminal (Cron, Bereitstellung, Container), wird nicht
+gefragt und nichts eingerichtet.
+
+| Variable | Wirkung |
+|---|---|
+| `AI_BRAIN_TRAY=0` | nie anbieten |
+| `AI_BRAIN_TRAY=1` | anbieten, auch wenn die Erkennung daneben liegt |
+
+Auf der Instanz holt `php artisan companion:fetch` den Tray mit; ausgeliefert
+wird er unter `/install/tray/<ziel>`, und `/install.json` nennt ihn unter
+`tray` — getrennt von `available`, weil das PowerShell-Skript dort den ersten
+Windows-Eintrag nimmt und darin nichts liegen darf, was kein Harness ist.
 
 ## Der eigene Loop
 

@@ -1,7 +1,7 @@
 #!/bin/sh
-# AI Brain CLI — Installation
+# AI Brain Harness — Installation
 #
-#   curl -fsSL https://raw.githubusercontent.com/peppermint-digital/ai-brain-cli/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/peppermint-digital/ai-brain-harness/main/install.sh | sh
 #
 # Legt das Programm in ~/.local/bin ab und sorgt dafür, dass dieses
 # Verzeichnis in zsh und bash im PATH liegt. Vorhandene Einträge werden
@@ -9,13 +9,23 @@
 #
 # Bewusst POSIX-sh: das Skript läuft, bevor irgendetwas über die Shell des
 # Nutzers bekannt ist.
+#
+# Der empfohlene Weg ist der über die eigene Instanz
+# (`curl -fsSL https://deine-brain-domain.de/install.sh | sh`) — dort steckt
+# die Adresse schon im Befehl. Dieses Skript ist der Weg ohne Instanz.
 
 set -eu
 
-REPO_URL="https://github.com/peppermint-digital/ai-brain-cli.git"
-BIN_NAME="ai-brain-cli"
+REPO="peppermint-digital/ai-brain-harness"
+REPO_URL="https://github.com/${REPO}.git"
+BIN_NAME="ai-brain-harness"
+# Der Befehl hiess bis zum 15.10.2026 `ai-brain-cli`. Davon haengen
+# MCP-Eintraege, `brain`, Skripte und das imkr-Plugin ab. Der alte Name bleibt
+# deshalb als Verweis, bis alle Rechner umgestellt sind.
+ALT_NAME="ai-brain-cli"
+TRAY_NAME="ai-brain-tray"
 INSTALL_DIR="${AI_BRAIN_COMPANION_BIN_DIR:-$HOME/.local/bin}"
-MARKER="# ai-brain-cli: ~/.local/bin in den PATH"
+MARKER="# ai-brain-harness: ~/.local/bin in den PATH"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -24,6 +34,21 @@ die() { printf 'Fehler: %s\n' "$*" >&2; exit 1; }
 need() {
     command -v "$1" >/dev/null 2>&1 || die "$2"
 }
+
+# Ein Trap, einmal gesetzt. Zwei Traps in zwei Funktionen ueberschreiben sich
+# gegenseitig — und wer vor dem `trap` abbricht, laesst seine Dateien liegen.
+# Die Variablen werden erst beim Aufraeumen gelesen, also darf sie setzen, wer
+# will.
+work=""
+release_json=""
+
+aufraeumen() {
+    [ -n "$work" ] && rm -rf "$work"
+    [ -n "$release_json" ] && rm -f "$release_json"
+    return 0
+}
+
+trap aufraeumen EXIT INT TERM
 
 # --------------------------------------------------------------- fertig ----
 
@@ -40,6 +65,38 @@ ziel_erkennen() {
     esac
 }
 
+# Die Adresse einer Datei im letzten Release — oder nichts.
+#
+# Das Release wird EINMAL abgefragt und zwischengelegt: Der Tray fragt danach
+# noch einmal nach seiner eigenen Datei, und die GitHub-API zaehlt Abfragen
+# ohne Anmeldung (60 pro Stunde).
+release_laden() {
+    [ -n "$release_json" ] && return 0
+    command -v curl >/dev/null 2>&1 || return 1
+
+    release_json="$(mktemp)"
+
+    if ! curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            -o "$release_json" 2>/dev/null; then
+        rm -f "$release_json"
+        release_json=""
+        return 1
+    fi
+
+    return 0
+}
+
+release_adresse() {
+    datei="$1"
+
+    release_laden || return 1
+
+    url="$(grep -o "https://[^\"]*/${datei}" "$release_json" | head -1)"
+
+    [ -n "$url" ] || return 1
+    printf '%s\n' "$url"
+}
+
 # Versucht, das gebaute Programm aus dem letzten Release zu holen.
 #
 # Gelingt das, spart es dem Nutzer eine Rust-Installation und eine halbe Minute
@@ -53,19 +110,19 @@ download_release() {
 
     say "Suche ein gebautes Programm fuer $ziel …"
 
-    url="$(curl -fsSL "https://api.github.com/repos/peppermint-digital/ai-brain-cli/releases/latest" 2>/dev/null \
-        | grep -o "https://[^\"]*ai-brain-cli-${ziel}" \
-        | head -1)"
+    # Beide Namen, neuester zuerst: Releases von vor dem 15.10.2026 tragen
+    # noch `ai-brain-cli-<ziel>`. Wer nur den neuen Namen sucht, laeuft an
+    # einer Datei vorbei, die daliegt.
+    url="$(release_adresse "${BIN_NAME}-${ziel}" || release_adresse "${ALT_NAME}-${ziel}")" || return 1
 
     [ -n "$url" ] || return 1
 
     work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT INT TERM
 
-    curl -fsSL "$url" -o "$work/ai-brain-cli" || return 1
+    curl -fsSL "$url" -o "$work/$BIN_NAME" || return 1
 
     mkdir -p "$INSTALL_DIR"
-    install -m 755 "$work/ai-brain-cli" "$INSTALL_DIR/$BIN_NAME"
+    install -m 755 "$work/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"
 
     say "Fertiges Programm uebernommen — kein Bau noetig."
     return 0
@@ -79,10 +136,10 @@ build_from_source() {
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 Danach eine neue Shell öffnen und dieses Skript erneut ausführen."
 
-    work="$(mktemp -d)"
     # Auch bei Abbruch aufräumen — sonst bleiben Klone im temporären
-    # Verzeichnis liegen, jeder ein paar hundert Megabyte nach dem Bauen.
-    trap 'rm -rf "$work"' EXIT INT TERM
+    # Verzeichnis liegen, jeder ein paar hundert Megabyte nach dem Bauen. Das
+    # macht der Trap oben.
+    work="$(mktemp -d)"
 
     say "Hole den Quelltext …"
     git clone --depth 1 --quiet "$REPO_URL" "$work/src"
@@ -92,6 +149,190 @@ Danach eine neue Shell öffnen und dieses Skript erneut ausführen."
 
     mkdir -p "$INSTALL_DIR"
     install -m 755 "$work/src/target/release/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"
+
+    # Der Quelltext liegt schon da — den Tray von hier zu bauen kostet nur noch
+    # die Bauzeit. Gebaut wird er aber nur, wenn er auch angeboten wird.
+    quelltext="$work/src"
+}
+
+# ------------------------------------------------------------------ Tray ----
+
+# `ai-brain-tray` zeigt die Live-Leitung in der Leiste und schaltet sie. Er
+# braucht eine Desktop-Sitzung; der Harness nicht. Deshalb wird er nicht
+# mitinstalliert, sondern angeboten — und nur dort, wo er etwas anzeigen kann.
+#
+#   AI_BRAIN_TRAY=0   nie anbieten
+#   AI_BRAIN_TRAY=1   anbieten, auch wenn die Erkennung unten daneben liegt
+
+# Dieser eine Rechner nie. Auf ihm laeuft AI Brain selbst, und er HAT eine
+# Desktop-Sitzung — die Pruefung darunter faengt ihn also nicht ab. Dort sitzt
+# aber niemand, der ein Menue anklickt.
+#
+# Erkannt am Benutzernamen und am imkr-Namen, NICHT am Hostnamen: der lautet
+# `omarchy` und damit genauso wie auf jedem anderen Omarchy-Rechner — eine
+# Pruefung darauf wuerde fremde Laptops mitsperren.
+ist_codingmachine() {
+    if [ "$(id -un 2>/dev/null)" = "codingmachine" ]; then
+        return 0
+    fi
+
+    conf="${XDG_CONFIG_HOME:-$HOME/.config}/imkr/config.toml"
+
+    if [ -r "$conf" ] && grep -q '^name[[:space:]]*=[[:space:]]*"codingmachine"' "$conf" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Eine Desktop-Sitzung MIT einer Leiste, die StatusNotifierItem bedient.
+#
+# Beides muss stimmen. Ohne Sitzungsbus findet der Tray niemanden; ohne Watcher
+# startet er und bleibt unsichtbar — der unangenehmere Fall, weil nichts
+# darauf hinweist.
+hat_tray_sitzung() {
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || return 1
+
+    if command -v busctl >/dev/null 2>&1; then
+        if busctl --user list 2>/dev/null | grep -q 'org.kde.StatusNotifierWatcher'; then
+            return 0
+        fi
+        return 1
+    fi
+
+    if command -v gdbus >/dev/null 2>&1; then
+        if gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus \
+                -m org.freedesktop.DBus.ListNames 2>/dev/null \
+                | grep -q 'org.kde.StatusNotifierWatcher'; then
+            return 0
+        fi
+        return 1
+    fi
+
+    if command -v dbus-send >/dev/null 2>&1; then
+        if dbus-send --session --print-reply --dest=org.freedesktop.DBus \
+                /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null \
+                | grep -q 'org.kde.StatusNotifierWatcher'; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # Kein Werkzeug, um zu fragen. Dann wird nicht geraten — ein Tray, der
+    # unsichtbar bleibt, ist schlimmer als keiner.
+    return 1
+}
+
+# Ist der Tray hier ueberhaupt am Platz?
+tray_erwuenscht() {
+    if [ "${AI_BRAIN_TRAY:-}" = "0" ]; then
+        return 1
+    fi
+
+    if [ "${AI_BRAIN_TRAY:-}" = "1" ]; then
+        return 0
+    fi
+
+    # ksni spricht StatusNotifierItem ueber D-Bus. Unter macOS und Windows gibt
+    # es das nicht; dort waere der Tray ein eigenes Programm mit eigener
+    # Signaturfrage.
+    if [ "$(uname -s)" != "Linux" ]; then
+        return 1
+    fi
+
+    if ist_codingmachine; then
+        say "Kein Tray auf der codingmachine — dort sitzt niemand vor dem Bildschirm."
+        return 1
+    fi
+
+    if ! hat_tray_sitzung; then
+        say "Keine Desktop-Sitzung mit StatusNotifier gefunden — kein Tray."
+        say "Nachtraeglich:  AI_BRAIN_TRAY=1 sh install.sh"
+        return 1
+    fi
+
+    return 0
+}
+
+tray_holen() {
+    ziel="$(ziel_erkennen)"
+
+    if [ -n "$ziel" ] && command -v curl >/dev/null 2>&1; then
+        url="$(release_adresse "${TRAY_NAME}-${ziel}" || true)"
+
+        if [ -n "${url:-}" ]; then
+            tray_work="$(mktemp -d)"
+
+            if curl -fsSL "$url" -o "$tray_work/$TRAY_NAME"; then
+                mkdir -p "$INSTALL_DIR"
+                install -m 755 "$tray_work/$TRAY_NAME" "$INSTALL_DIR/$TRAY_NAME"
+                rm -rf "$tray_work"
+                return 0
+            fi
+
+            rm -rf "$tray_work"
+        fi
+    fi
+
+    # Kein Release, aber der Quelltext liegt vom Bauen noch da.
+    if [ -n "${quelltext:-}" ] && [ -d "$quelltext" ]; then
+        say "Baue den Tray aus dem Quelltext …"
+        ( cd "$quelltext" && cargo build --release --quiet -p "$TRAY_NAME" )
+        install -m 755 "$quelltext/target/release/$TRAY_NAME" "$INSTALL_DIR/$TRAY_NAME"
+        return 0
+    fi
+
+    return 1
+}
+
+tray_anbieten() {
+    tray_erwuenscht || return 0
+
+    say ""
+    say "Diese Sitzung kann einen Tray anzeigen — hole $TRAY_NAME …"
+
+    if ! tray_holen; then
+        say "Kein Tray verfuegbar (kein Release, kein Quelltext)."
+        say "Von Hand:  cargo install --git https://github.com/${REPO} $TRAY_NAME"
+        return 0
+    fi
+
+    say "Tray installiert: $INSTALL_DIR/$TRAY_NAME"
+
+    # „Nur auf Nachfrage" heisst: ein Mensch sagt ja.
+    #
+    # Dieses Skript laeuft ueber `curl | sh` — die Standardeingabe ist dann die
+    # Leitung MIT DEM SKRIPT DARIN, nicht die Tastatur. Ein `read` wuerde das
+    # Skript anfressen. Gefragt wird deshalb ueber /dev/tty.
+    #
+    # Gibt es kein Terminal (Cron, Bereitstellung, Container), wird NICHT
+    # gefragt und NICHT eingerichtet: Autostart ist etwas, das jemand wollen
+    # muss.
+    if ! (exec 3< /dev/tty) 2>/dev/null; then
+        say ""
+        say "Kein Terminal zum Fragen — Autostart nicht eingerichtet."
+        say "Spaeter von Hand:  $TRAY_NAME --autostart"
+        return 0
+    fi
+
+    printf 'Tray beim Anmelden automatisch starten? [j/N] ' > /dev/tty
+    antwort=""
+    read -r antwort < /dev/tty || antwort=""
+
+    case "$antwort" in
+        j|J|ja|Ja|JA|y|Y|yes|Yes)
+            if "$INSTALL_DIR/$TRAY_NAME" --autostart; then
+                say "Autostart eingerichtet (~/.config/autostart)."
+            else
+                say "Autostart liess sich nicht einrichten."
+            fi
+            ;;
+        *)
+            say "Kein Autostart. Spaeter:  $TRAY_NAME --autostart"
+            ;;
+    esac
+
+    say "Jetzt starten:  $TRAY_NAME &"
 }
 
 # ------------------------------------------------------------------ PATH ----
@@ -159,13 +400,21 @@ setup_path() {
 
 # ------------------------------------------------------------------ Lauf ----
 
-say "AI Brain CLI — Installation"
+say "AI Brain Harness — Installation"
 say ""
+
+quelltext=""
 
 if ! download_release; then
     say "Kein passendes Release gefunden — baue aus dem Quelltext."
     build_from_source
 fi
+
+# Der Uebergangsname. Ein Symlink genuegt: Das Programm entscheidet an seinem
+# ersten Argument, nicht an argv[0].
+ln -sf "$INSTALL_DIR/$BIN_NAME" "$INSTALL_DIR/$ALT_NAME"
+
+tray_anbieten
 
 say ""
 setup_path
@@ -179,7 +428,13 @@ say ""
 # unter „Meine Geraete", der neue mit der Grundausstattung statt der gepflegten
 # Auswahl, und die Zeiterfassung auf zwei Namen verteilt. Der Austausch des
 # Programms laesst die Verbindung unberuehrt.
-if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/ai-brain-cli/connection.json" ]; then
+#
+# BEIDE Ablagen pruefen: Ein Rechner mit der Fassung vor der Umbenennung hat die
+# Verbindung noch unter dem alten Namen — das Programm holt sie beim ersten Lauf
+# herueber, dieses Skript laeuft davor.
+conf_basis="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+if [ -f "$conf_basis/ai-brain-cli/connection.json" ] || [ -f "$conf_basis/ai-brain-companion/connection.json" ]; then
     say "Dieser Rechner ist bereits verbunden — kein 'connect' noetig."
     say ""
     say "Öffne eine neue Shell (oder:  . ~/.zshrc  bzw.  . ~/.bashrc), dann:"

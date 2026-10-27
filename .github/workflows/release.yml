@@ -38,6 +38,12 @@ jobs:
           - os: ubuntu-latest
             ziel: x86_64-unknown-linux-gnu
             datei: ai-brain-harness
+            # Nur hier wird der Tray mitgebaut: ksni spricht
+            # StatusNotifierItem ueber D-Bus, und das gibt es unter macOS und
+            # Windows nicht. Ein Tray fuer die beiden waere ein eigenes
+            # Programm und braeuchte eine Signatur — beides wartet auf eine
+            # Entscheidung, nicht auf diesen Workflow.
+            tray: true
           # Beide macOS-Ziele auf demselben Laeufer: Das SDK bringt beide
           # Architekturen mit, Rust kann von Apple Silicon nach Intel bauen.
           # Der frueher hier stehende `macos-13`-Laeufer ist ausgemustert — der
@@ -70,6 +76,20 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.ziel }}/release/${{ matrix.datei }}" \
              "dist/ai-brain-harness-${{ matrix.ziel }}${{ matrix.datei == 'ai-brain-harness.exe' && '.exe' || '' }}"
+
+      # Der Tray ist ein eigenes Paket im Workspace. `cargo build` im
+      # Wurzelverzeichnis baut nur das Harness-Paket — ohne `-p` kaeme er nie
+      # mit, und das Release saehe vollstaendig aus.
+      - name: Tray bauen
+        if: matrix.tray
+        run: cargo build --release --target ${{ matrix.ziel }} -p ai-brain-tray
+
+      - name: Tray umbenennen
+        if: matrix.tray
+        shell: bash
+        run: |
+          cp "target/${{ matrix.ziel }}/release/ai-brain-tray" \
+             "dist/ai-brain-tray-${{ matrix.ziel }}"
 
       - uses: actions/upload-artifact@v4
         with:
