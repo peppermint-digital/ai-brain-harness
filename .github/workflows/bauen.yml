@@ -1,0 +1,87 @@
+name: Bauen
+
+# Baut, was das Release baut — aber ohne Release.
+#
+# ## Warum es diesen Workflow gibt (Stand 27.10.2026)
+#
+# Der Tray haengt seit dem 27.10.2026 an drei Leisten: ksni unter Linux,
+# tray-icon mit tao unter macOS und Windows. Auf dem Entwicklungsrechner
+# (Arch, Rust aus pacman, kein rustup) gibt es keine Standardbibliothek fuer
+# fremde Ziele — die beiden Fremdpfade lassen sich dort also nicht einmal
+# typpruefen.
+#
+# Bis dahin war das kein Problem: Gebaut wurde erst beim Tag, und wenn etwas
+# fehlschlug, fehlte eben ein Programm im Release. Mit Code, der nur auf
+# fremden Plattformen uebersetzt wird, ist das zu spaet — ein Tippfehler in
+# `fremd.rs` kaeme erst heraus, wenn das Release schon laeuft, und ein
+# Fehlschlag im Tray-Schritt kostet dann die Harness-Datei derselben
+# Plattform mit (die Artefakte eines gescheiterten Auftrags werden nicht
+# hochgeladen).
+#
+# Deshalb hier derselbe Bau auf jedem Push nach main. Fuer oeffentliche
+# Repositories sind die Laeufer kostenlos.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pruefen:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Format
+        run: cargo fmt --check -p ai-brain-tray
+      - name: Tests
+        run: cargo test -p ai-brain-tray
+
+  bauen:
+    name: ${{ matrix.ziel }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            ziel: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            ziel: aarch64-apple-darwin
+          - os: macos-latest
+            ziel: x86_64-apple-darwin
+          - os: windows-latest
+            ziel: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust einrichten
+        run: rustup target add ${{ matrix.ziel }}
+
+      - name: Harness bauen
+        run: cargo build --release --target ${{ matrix.ziel }}
+
+      # Der eigentliche Grund fuer diesen Workflow.
+      - name: Tray bauen
+        run: cargo build --release --target ${{ matrix.ziel }} -p ai-brain-tray
+
+      # Dass das Programm startet, sagt mehr als dass es uebersetzt: Die
+      # Leiste gibt es auf einem Laeufer nicht, `--help` kommt aber ohne sie
+      # aus und faengt fehlende Bibliotheken ab, die erst beim Laden auffallen.
+      #
+      # Nur fuer das eigene Ziel: Ein Intel-Programm startet auf einem
+      # Apple-Silicon-Laeufer nicht von sich aus.
+      - name: Laeuft es?
+        if: matrix.ziel != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./target/${{ matrix.ziel }}/release/ai-brain-tray.exe --help
+          else
+            ./target/${{ matrix.ziel }}/release/ai-brain-tray --help
+          fi
