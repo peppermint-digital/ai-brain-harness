@@ -991,11 +991,7 @@ fn dienst() -> Result<(), String> {
         //     Antwort, auf die er nicht reagieren darf.
         if matches!(stand_jetzt(), Stand::Veto) {
             lage_stand("abgeschaltet", Some("von Hand ausgeschaltet"));
-
-            if warten_bis_an(FREIGABE_TAKT) {
-                continue;
-            }
-
+            warten_bis_an(FREIGABE_TAKT);
             continue;
         }
 
