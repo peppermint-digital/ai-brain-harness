@@ -12,9 +12,9 @@ kann dreierlei heissen, und wir sind es zweimal.
 
 | Was gemeint sein kann | Koennen wir? | Wie |
 |---|---|---|
-| Mehrere Rechner an einer Instanz | ja | Ein Geraetezugang je Rechner. Jeder sieht nur seine Auftraege. |
-| Mehrere Konten auf einem Rechner | ja | Die Ablage liegt im Heimverzeichnis. Jedes Konto koppelt sich selbst. |
-| Zwei Menschen unter einem Konto | nein | Dann handeln beide als dieselbe Person. Das ist eine echte Grenze. |
+| Mehrere **Rechner** an einer Instanz | ja | Ein Geraetezugang je Rechner. Jeder sieht nur seine Auftraege. |
+| Mehrere **Konten** auf einem Rechner | ja | Die Ablage liegt im Heimverzeichnis. Jedes Konto koppelt sich selbst. |
+| Zwei **Menschen unter einem Konto** | nein | Dann handeln beide als dieselbe Person. Das ist eine echte Grenze. |
 
 ## Woran die Identitaet haengt
 

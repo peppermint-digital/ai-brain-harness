@@ -30,9 +30,23 @@ def nach_markdown(titel, vorspann, rumpf):
     def tabelle(m):
         zeilen = re.findall(r'<tr>(.*?)</tr>', m.group(1), flags=re.S)
         aus, kopf = [], True
+
+        # Auszeichnungen IN der Zelle zuerst uebersetzen, dann den Rest
+        # strippen. Vorher fiel beides weg, weil der Strip unten alle Tags
+        # nimmt — ein Befehl in einer Tabelle stand in der Markdown-Fassung
+        # also als nackter Text da. Gemerkt am 27.10.2026: In befehle.md
+        # waren die Backticks von Hand nachgetragen, und der dokumentierte
+        # Bau-Befehl haette sie wieder entfernt.
+        def zelle(c):
+            c = re.sub(r'<code>(.*?)</code>', r'`\1`', c, flags=re.S)
+            c = re.sub(r'<strong>(.*?)</strong>', r'**\1**', c, flags=re.S)
+            c = re.sub(r'<em>(.*?)</em>', r'*\1*', c, flags=re.S)
+            # Ein Pipe im Text wuerde die Tabelle sprengen.
+            c = re.sub(r'<[^>]+>', '', c).replace('|', '\\|')
+            return re.sub(r'\s+', ' ', c).strip()
+
         for z in zeilen:
-            zellen = [re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', c)).strip()
-                      for c in re.findall(r'<t[hd]>(.*?)</t[hd]>', z, flags=re.S)]
+            zellen = [zelle(c) for c in re.findall(r'<t[hd]>(.*?)</t[hd]>', z, flags=re.S)]
             aus.append('| ' + ' | '.join(zellen) + ' |')
             if kopf:
                 aus.append('|' + '---|' * len(zellen)); kopf = False

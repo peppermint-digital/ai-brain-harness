@@ -15,12 +15,12 @@ Unter `~/.config/ai-brain-cli/` — und das ist *alles*:
 
 | Datei | Was | Verlust, wenn weg? |
 |---|---|---|
-| connection.json | Zugangsdaten des Geraets (0600) | Neu koppeln. |
-| token.json | Zugangstoken, eine Stunde gueltig | Nichts, wird neu geholt. |
-| sync-state.json | Welcher Stand zuletzt abgeglichen wurde | Der naechste Abgleich vergleicht Dateien statt Pruefsummen. |
-| freigaben.json | Welche Verzeichnisse mehr duerfen | Laeufe fragen wieder vor jeder Tat. |
-| gesicherte-fassungen/ | Was --force ueberschrieben hat | Die Sicherungskopien. |
-| …/state/ai-brain-cli/laeufe/ | Laufregister und Protokolle | Die Liste vergangener Laeufe. |
+| `connection.json` | Zugangsdaten des Geraets (0600) | Neu koppeln. |
+| `token.json` | Zugangstoken, eine Stunde gueltig | Nichts, wird neu geholt. |
+| `sync-state.json` | Welcher Stand zuletzt abgeglichen wurde | Der naechste Abgleich vergleicht Dateien statt Pruefsummen. |
+| `freigaben.json` | Welche Verzeichnisse mehr duerfen | Laeufe fragen wieder vor jeder Tat. |
+| `gesicherte-fassungen/` | Was `--force` ueberschrieben hat | Die Sicherungskopien. |
+| `…/state/ai-brain-cli/laeufe/` | Laufregister und Protokolle | Die Liste vergangener Laeufe. |
 
 **Kein Gedanke, keine Notiz, kein Gelerntes.** Nichts davon ist Wissen — es ist
 Handwerkszeug. Wer das Verzeichnis loescht, verliert keinen Inhalt.
@@ -33,9 +33,9 @@ Die Datei ist die Quelle, die Datenbank der Index.
 
 | Art | Werkzeug | Liegt unter | Reichweite |
 |---|---|---|---|
-| Projektwissen | add-memory-tool | projekte/<slug>/memories/ | ein Projekt |
-| Uebergreifendes | add-wiki-tool | wiki/ | alle Projekte |
-| Fehler | create-bug-tool | projekte/<slug>/bugs/ | ein Projekt |
+| Projektwissen | `add-memory-tool` | `projekte/<slug>/memories/` | ein Projekt |
+| Uebergreifendes | `add-wiki-tool` | `wiki/` | alle Projekte |
+| Fehler | `create-bug-tool` | `projekte/<slug>/bugs/` | ein Projekt |
 | Aufgaben, Zeit, Pruefspur | eigene Werkzeuge | Datenbank | alle |
 
 Gemessen am 15.10.2026: **4239 Eintraege** ueber **47 Projekte**.

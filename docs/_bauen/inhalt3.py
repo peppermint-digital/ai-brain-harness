@@ -136,13 +136,52 @@ automatische Melden scheiterte.</td></tr>
 <h2>Wissen abgleichen</h2>
 <table>
 <tr><th>Befehl</th><th>Was</th></tr>
-<tr><td><code>sync [--apply]</code></td><td>Skills und Agents aus dem Repository holen. Ohne
-<code>--apply</code> wird nur gezeigt.</td></tr>
+<tr><td><code>sync [--apply]</code></td><td>Skills und Agents aus dem Repository holen, einzeln
+gewaehlte MCP-Server in Claude Code und Codex eintragen. Ohne <code>--apply</code> wird nur
+gezeigt.</td></tr>
 <tr><td><code>publish &lt;name&gt;</code></td><td>Einen lokalen Eintrag zurueckgeben.</td></tr>
-<tr><td><code>select</code></td><td>Waehlen, welche Eintraege dieser Rechner bekommt.</td></tr>
+<tr><td><code>select</code></td><td>Waehlen, welche Eintraege dieser Rechner bekommt. MCP-Server
+nur einzeln, nie ueber &bdquo;alles&ldquo;.</td></tr>
+<tr><td><code>select --dazu a,b / --weg a,b</code></td><td>Ohne Terminal ergaenzen bzw. entfernen,
+der Modus bleibt. Namen als <code>typ/slug</code> (<code>mcp/playwright</code>) oder eindeutiger
+Slug; mehrdeutig oder unbekannt bricht ab, ohne zu speichern.</td></tr>
+<tr><td><code>select --setzen a,b</code></td><td>Stellt auf Modus &bdquo;auswahl&ldquo; und ersetzt
+die ganze Liste. Ein Rechner auf &bdquo;alles&ldquo; verliert damit alle uebrigen Eintraege &mdash;
+zum Ergaenzen <code>--dazu</code>.</td></tr>
 </table>
 <p>Weitere Schalter fuer <code>sync</code>: <code>--only</code>, <code>--force</code>,
 <code>--aufraeumen</code>, <code>--ja</code>.</p>
+
+<h2>Live-Leitung</h2>
+<table>
+<tr><th>Befehl</th><th>Was</th></tr>
+<tr><td><code>leitung an [--dauer 30m]</code></td><td>Von Hand einschalten, hoechstens 8 h. Hebt
+ein vorheriges <code>aus</code> auf.</td></tr>
+<tr><td><code>leitung aus</code></td><td>Auflegen &mdash; und zwar bis zum naechsten Einschalten,
+nicht bis zum naechsten Herzschlag.</td></tr>
+<tr><td><code>leitung status [--json]</code></td><td>Schalter, Grund, Prozess, Verbindung.</td></tr>
+<tr><td><code>leitung dienst</code></td><td>Haelt die Leitung und schaltet sie selbst, nach der
+Freigabe in AI Brain.</td></tr>
+<tr><td><code>leitung autostart</code></td><td>Den Dienst beim Anmelden starten.
+<code>kein-autostart</code> bestellt es ab.</td></tr>
+<tr><td><code>leitung laufen</code></td><td>Die Leitung im Vordergrund halten, ohne Dienst.</td></tr>
+</table>
+<p>Die Leitung zeigt ein imkr-Pane dieses Rechners in AI Brain und nimmt Tastendruecke von dort
+an. Der Rechner verbindet sich <strong>ausgehend</strong>; AI Brain ruft hier nie etwas auf.</p>
+<p><strong>Drei Zustaende, und die Reihenfolge ist die Regel.</strong> Ein <em>Veto</em> (aus
+<code>leitung aus</code> oder dem Linksklick im Tray) schlaegt alles und hat keine Frist &mdash;
+sonst waere &bdquo;aus&ldquo; eine Bitte und keine Anweisung. Darunter gilt der Hand-Schalter mit
+seiner Restzeit, darunter die automatische Leitung. Sie hat keine Frist, sondern eine Bedingung:
+Mindestens ein Channel muss diesen Rechner in AI Brain freigegeben haben. Faellt die Freigabe,
+legt sie binnen einer Minute selbst auf. Ohne Freigabe bleibt sie aus.</p>
+<p><strong>Das verschiebt keine Sperre.</strong> Ob ein Agent etwas darf, prueft AI Brain bei jedem
+Aufruf gegen die Freigabe je Channel und Geraet. Eine offene Leitung ohne Freigabe ist nutzlos,
+nicht erlaubt.</p>
+<p>Ueber dieselbe Leitung kommen die Auftraege der imkr-Werkzeuge eines Channels. Jeder ist eine
+eigene Art, und der Rechner baut seine Befehlszeile selbst: <code>sitzungen</code> fuehrt
+<code>imkr ls --json</code> aus (gefiltert, ohne Bildschirminhalte), <code>lesen</code> fuehrt
+<code>imkr read</code> aus, und nur <code>befehl</code> fuehrt einen mitgeschickten Text aus &mdash;
+und haengt an einer eigenen Freigabe.</p>
 
 <h2>Als MCP-Server</h2>
 <pre><code>ai-brain-cli mcp</code></pre>
