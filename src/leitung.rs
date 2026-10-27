@@ -961,6 +961,9 @@ fn warten_bis_an(dauer: Duration) -> bool {
     schalter_gilt()
 }
 
+/// Ob die letzte Freigabe-Frage ohne Antwort blieb.
+static STUMME_INSTANZ: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Der Dienst: läuft beim Anmelden an und bleibt (#8932).
 ///
 /// **Was er tut, und was er bewusst nicht tut.** Er hält die Leitung, solange
@@ -1017,7 +1020,21 @@ fn dienst() -> Result<(), String> {
             }
             // Keine Auskunft heisst nicht „nein": `auto` bleibt, wie es war.
             // Ein Netzausfall soll keine Leitung auflegen, die zu Recht stand.
-            None => melden("Keine Auskunft über die Freigabe — Schalter bleibt, wie er ist."),
+            //
+            // Gemeldet wird nur der ERSTE Ausfall und die Erholung, nicht jeder
+            // Versuch — dasselbe Muster wie beim Herzschlag und bei den
+            // Brain-Ausfällen des Bündlers. Alle fünf Minuten dieselbe Zeile
+            // macht das Protokoll genau dann unlesbar, wenn man darin nach
+            // einem echten Ereignis sucht.
+            None => {
+                if !STUMME_INSTANZ.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    melden("Keine Auskunft über die Freigabe — Schalter bleibt, wie er ist.");
+                }
+            }
+        }
+
+        if freigabe.is_some() && STUMME_INSTANZ.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            melden("AI Brain antwortet wieder.");
         }
 
         // 3 ─ An? Dann halten. Sonst warten und neu fragen.
