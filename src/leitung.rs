@@ -996,6 +996,8 @@ pub enum Eingabe {
     Senden(Senden),
     /// Die letzten Zeilen eines Panes lesen, für einen Agenten.
     Lesen(Lesen),
+    /// Sitzungen, Fenster und Panes auflisten, für einen Agenten.
+    Sitzungen(Sitzungen),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1028,6 +1030,21 @@ pub struct Lesen {
 
 const LESEN_ZEILEN_VORGABE: u64 = 50;
 const LESEN_ZEILEN_HOECHST: u64 = 2000;
+
+/// `art: sitzungen` — welche Sitzungen, Fenster und Panes es hier gibt (#8932).
+///
+/// **Die Nutzlast trägt nichts als Auftrag und Frist.** Noch eine Stufe
+/// strenger als [`Lesen`]: Dort ist eine Zahl im Spiel, hier nicht einmal
+/// das. Ausgeführt wird allein `imkr ls --json`, gebaut in [`sitzungen_zeile`]
+/// aus nichts als der Art. Es gibt kein Feld, über das der Aufrufer die
+/// Befehlszeile beeinflussen könnte — auch keine Option, kein `--all`, keinen
+/// Rechnernamen. Ein `--all` würde über ssh fremde Rechner befragen, und der
+/// Harness bleibt strikt lokal.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Sitzungen {
+    pub frist: u64,
+    pub auftrag: serde_json::Value,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Befehl {
@@ -1069,6 +1086,22 @@ pub fn eingabe_lesen(daten: &str) -> Result<Eingabe, String> {
         "zuschauer" => return Ok(Eingabe::Zuschauer),
         "seite" => return Ok(Eingabe::Seite),
         "senden" => return senden_lesen(&wert).map(Eingabe::Senden),
+        // Hier oben, weil es kein Pane HAT: Die Frage lautet „welche Panes
+        // gibt es". Ein Pane als Pflichtfeld wäre die Antwort in der Frage.
+        "sitzungen" => {
+            return Ok(Eingabe::Sitzungen(Sitzungen {
+                frist: wert
+                    .get("frist")
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(FRIST_BEFEHL_VORGABE)
+                    .clamp(1, FRIST_BEFEHL_HOECHST),
+                auftrag: wert
+                    .get("auftrag")
+                    .filter(|a| !a.is_null())
+                    .cloned()
+                    .ok_or("Sitzungen ohne auftrag — die Liste hätte keinen Empfänger.")?,
+            }))
+        }
         _ => {}
     }
 
@@ -1176,7 +1209,7 @@ fn abgelehnter_auftrag(daten: &str) -> Option<serde_json::Value> {
     let wert: serde_json::Value = serde_json::from_str(daten).ok()?;
     let art = wert.get("art")?.as_str()?;
 
-    if art != "befehl" && art != "lesen" {
+    if art != "befehl" && art != "lesen" && art != "sitzungen" {
         return None;
     }
 
@@ -1847,6 +1880,14 @@ impl Steuerung {
                 ));
                 let c = self.c.clone();
                 std::thread::spawn(move || lesen_melden(&c, &lesen));
+            }
+            Eingabe::Sitzungen(sitzungen) => {
+                melden(&format!(
+                    "Sitzungen für Auftrag {} (Frist {} s)",
+                    sitzungen.auftrag, sitzungen.frist
+                ));
+                let c = self.c.clone();
+                std::thread::spawn(move || sitzungen_melden(&c, &sitzungen));
             }
         }
     }
@@ -2526,6 +2567,160 @@ fn lesen_melden(c: &Connection, lesen: &Lesen) {
     ergebnis_melden(c, &lesen.auftrag, exit, &ausgabe, abgebrochen);
 }
 
+/// Die Befehlszeile für `sitzungen` — aus nichts als der Art gebaut.
+///
+/// **Kein `--all`.** Das würde über ssh andere Rechner befragen; der Harness
+/// bleibt strikt lokal, und der Agent hat eine Freigabe für DIESEN Rechner,
+/// nicht für dessen Nachbarn.
+pub fn sitzungen_zeile() -> Vec<String> {
+    vec!["ls".into(), "--json".into()]
+}
+
+/// Die Felder, die aus `imkr ls --json` herausgehen — eine POSITIVLISTE.
+///
+/// **Warum eine Positivliste und nicht ein Verbot von `tail`.** `imkr ls
+/// --json` legt zu jedem Pane ein `tail` bei, nämlich den unteren Rand des
+/// Bildschirms — das ist Inhalt, und Inhalt gibt es nur über `lesen`, das ein
+/// eigenes Werkzeug mit eigenem Haken ist. Es per Sperrliste zu entfernen
+/// würde heute genauso wirken; der Unterschied kommt mit der nächsten
+/// imkr-Fassung. Legt die ein Feld dazu — eine Vorschau, eine Zwischenablage,
+/// einen Befehlsverlauf —, fährt es bei einer Sperrliste von selbst mit, und
+/// zwar still. Hier muss jemand dieses Feld erst hinschreiben.
+///
+/// Was durchgeht, ist deshalb genau das, was ein Agent zum Adressieren und
+/// Einordnen braucht: Adresse, Fenster, Programm, Zustand, Titel.
+fn pane_gefiltert(sitzung: &str, pane: &serde_json::Value) -> serde_json::Value {
+    let nummer = pane.get("pane").and_then(|p| p.as_u64()).unwrap_or(0);
+    let text = |feld: &str| {
+        pane.get(feld)
+            .and_then(|w| w.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let mut m = serde_json::Map::new();
+
+    // Genau die Form, die `pane` in imkr-lesen und imkr-befehl erwartet. Sie
+    // steht hier fertig da, damit der Agent sie nicht zusammensetzen muss —
+    // eine selbstgebaute Adresse ist die Fehlerquelle, die dieses Werkzeug
+    // beseitigen soll.
+    m.insert("adresse".into(), format!("{sitzung}/{nummer}").into());
+    m.insert("pane".into(), nummer.into());
+    m.insert(
+        "fenster".into(),
+        pane.get("workspace")
+            .and_then(|w| w.as_u64())
+            .unwrap_or(0)
+            .into(),
+    );
+    // `dir` heisst in imkr der Fenstername, sonst der Verzeichnisname — das,
+    // was Agenten unterscheidet, die alle `claude` heissen.
+    m.insert("fenster_name".into(), text("dir").into());
+    m.insert("programm".into(), text("program").into());
+    m.insert("zustand".into(), text("state").into());
+    m.insert(
+        "seit".into(),
+        pane.get("since").and_then(|w| w.as_u64()).unwrap_or(0).into(),
+    );
+    m.insert("meta".into(), text("meta").into());
+    m.insert("titel".into(), text("title").into());
+
+    serde_json::Value::Object(m)
+}
+
+/// Projiziert die Antwort von `imkr ls --json` auf die Positivliste.
+///
+/// Was hier nicht ausdrücklich abgeschrieben wird, verlässt den Rechner nicht.
+pub fn sitzungen_filtern(roh: &str) -> Result<String, String> {
+    let wert: serde_json::Value =
+        serde_json::from_str(roh).map_err(|e| format!("imkr ls --json unlesbar: {e}"))?;
+
+    let liste = wert
+        .as_array()
+        .ok_or("imkr ls --json lieferte keine Liste.")?;
+
+    let mut sitzungen = Vec::new();
+
+    for sitzung in liste {
+        let name = sitzung
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let mut m = serde_json::Map::new();
+        m.insert("name".into(), name.clone().into());
+        m.insert(
+            "fenster".into(),
+            sitzung
+                .get("windows")
+                .and_then(|w| w.as_u64())
+                .unwrap_or(0)
+                .into(),
+        );
+        m.insert(
+            "panes".into(),
+            sitzung
+                .get("panes")
+                .and_then(|w| w.as_u64())
+                .unwrap_or(0)
+                .into(),
+        );
+
+        // Zustandszählung je Sitzung, so wie `imkr ls` sie zeigt.
+        if let Some(agenten) = sitzung.get("agents").filter(|a| a.is_object()) {
+            m.insert("agenten".into(), agenten.clone());
+        }
+
+        // Eine schlafende Sitzung hat keine Panes zum Lesen — das gehört
+        // dazugesagt, sonst sucht ein Agent Adressen, die es nicht gibt.
+        if let Some(ruht) = sitzung.get("dormant").and_then(|d| d.as_str()) {
+            m.insert("ruht".into(), ruht.into());
+        }
+
+        let panes: Vec<serde_json::Value> = sitzung
+            .get("all_panes")
+            .and_then(|p| p.as_array())
+            .map(|p| p.iter().map(|e| pane_gefiltert(&name, e)).collect())
+            .unwrap_or_default();
+
+        m.insert("fenster_panes".into(), panes.into());
+
+        sitzungen.push(serde_json::Value::Object(m));
+    }
+
+    serde_json::to_string_pretty(&serde_json::json!({ "sitzungen": sitzungen }))
+        .map_err(|e| format!("Sitzungsliste nicht schreibbar: {e}"))
+}
+
+/// Listet die Sitzungen und meldet die Liste auf demselben Weg wie ein
+/// Befehlsergebnis.
+///
+/// **Gefiltert wird hier, nicht bei Brain.** Der Rechner ist die Stelle, an
+/// der entschieden werden muss, was ihn verlässt: Was einmal draussen ist,
+/// steht in einem Auftragsbuch und in einem Protokoll, und beides kann ein
+/// nachträglicher Filter nicht mehr einholen.
+fn sitzungen_melden(c: &Connection, sitzungen: &Sitzungen) {
+    let (exit, roh, abgebrochen) =
+        imkr_mit_frist(&sitzungen_zeile(), Duration::from_secs(sitzungen.frist));
+
+    // Nur eine erfolgreiche Antwort wird gefiltert. Bei einem Fehlschlag steht
+    // in `roh` die Meldung von imkr und kein JSON — die geht unverändert
+    // durch, denn sie ist die Auskunft.
+    if exit != Some(0) || abgebrochen {
+        ergebnis_melden(c, &sitzungen.auftrag, exit, &roh, abgebrochen);
+        return;
+    }
+
+    match sitzungen_filtern(&String::from_utf8_lossy(&roh)) {
+        Ok(liste) => ergebnis_melden(c, &sitzungen.auftrag, exit, liste.as_bytes(), false),
+        // Unlesbar heisst abgelehnt, nicht „dann eben ungefiltert": Eine
+        // Antwort, die wir nicht zerlegen können, können wir auch nicht
+        // säubern.
+        Err(grund) => abgelehnt_melden(c, &sitzungen.auftrag, &grund),
+    }
+}
+
 /// Ein abgelehntes `befehl`/`lesen`: kein Exit-Code, der Grund als Ausgabe.
 /// Nichts davon ist gelaufen — auch nicht teilweise.
 pub fn abgelehnt_rumpf(auftrag: &serde_json::Value, grund: &str) -> String {
@@ -2807,6 +3002,187 @@ mod tests {
 
         assert!(eingabe_lesen(r#"{"art":"lesen","pane":"bau/2"}"#).is_err());
         assert!(eingabe_lesen(r#"{"art":"lesen","pane":"laptop:bau/2","auftrag":"a"}"#).is_err());
+    }
+
+    // ── Sitzungen auflisten (#8932) ─────────────────────────────────────────
+
+    #[test]
+    fn sitzungen_fuehrt_nur_imkr_ls_json_aus_egal_was_mitkommt() {
+        // Alles, was ein Aufrufer unterschieben könnte, ist hier dabei: ein
+        // Befehl, ein Text, ein Pane, eine Option, ein Rechnername. Nichts
+        // davon darf die Befehlszeile erreichen — die steht in
+        // `sitzungen_zeile()` fest und kennt die Nutzlast gar nicht.
+        let Ok(Eingabe::Sitzungen(sz)) = eingabe_lesen(
+            r#"{"art":"sitzungen","auftrag":"a1","befehl":"rm -rf ~","text":"x",
+                "pane":"-s/0","args":["--all"],"host":"anderer"}"#,
+        ) else {
+            panic!("sitzungen nicht erkannt");
+        };
+        assert_eq!(sz.frist, FRIST_BEFEHL_VORGABE);
+        assert_eq!(sitzungen_zeile(), vec!["ls", "--json"]);
+        // Und ausdrücklich: kein --all, auch nicht hinten dran.
+        assert!(!sitzungen_zeile().iter().any(|a| a == "--all"));
+    }
+
+    #[test]
+    fn sitzungen_deckelt_die_frist_und_verlangt_einen_auftrag() {
+        let Ok(Eingabe::Sitzungen(sz)) =
+            eingabe_lesen(r#"{"art":"sitzungen","frist":99999,"auftrag":7}"#)
+        else {
+            panic!("sitzungen nicht erkannt");
+        };
+        assert_eq!(sz.frist, FRIST_BEFEHL_HOECHST);
+        assert_eq!(sz.auftrag, serde_json::json!(7));
+
+        // Ohne Auftrag hätte die Liste keinen Empfänger.
+        assert!(eingabe_lesen(r#"{"art":"sitzungen"}"#).is_err());
+        assert!(eingabe_lesen(r#"{"art":"sitzungen","auftrag":null}"#).is_err());
+    }
+
+    #[test]
+    fn sitzungen_braucht_kein_pane() {
+        // Die Pane-Pflicht der anderen Arten darf hier nicht greifen: Die
+        // Frage lautet „welche Panes gibt es".
+        assert!(eingabe_lesen(r#"{"art":"sitzungen","auftrag":"a1"}"#).is_ok());
+        // Gegenprobe, dass die Pflicht überhaupt noch da ist.
+        assert!(eingabe_lesen(r#"{"art":"lesen","auftrag":"a1"}"#).is_err());
+    }
+
+    #[test]
+    fn sitzungen_filter_laesst_den_bildschirminhalt_nicht_raus() {
+        // `tail` ist der untere Rand des Bildschirms. Inhalt gibt es nur über
+        // `lesen`, und das hängt an einem eigenen Haken.
+        let roh = r#"[{"name":"imkr","panes":2,"windows":1,
+            "agents":{"working":1,"idle":1},
+            "all_panes":[
+              {"pane":3,"program":"claude","workspace":1,"dir":"ai-brain",
+               "state":"working","since":42,"meta":"opus 5 · 300k",
+               "tail":"GEHEIM: das Passwort lautet hunter2","title":"baut #8932"},
+              {"pane":0,"program":"bash","workspace":1,"dir":"ai-brain",
+               "state":"","since":0}
+            ]}]"#;
+
+        let gefiltert = sitzungen_filtern(roh).expect("filtern");
+        assert!(
+            !gefiltert.contains("hunter2") && !gefiltert.contains("tail"),
+            "Bildschirminhalt im Ergebnis: {gefiltert}"
+        );
+
+        let v: serde_json::Value = serde_json::from_str(&gefiltert).unwrap();
+        let s0 = &v["sitzungen"][0];
+        assert_eq!(s0["name"], "imkr");
+        assert_eq!(s0["fenster"], 1);
+        assert_eq!(s0["panes"], 2);
+        assert_eq!(s0["agenten"]["working"], 1);
+
+        let p0 = &s0["fenster_panes"][0];
+        // Die Adresse steht fertig da — genau die Form, die imkr-lesen will.
+        assert_eq!(p0["adresse"], "imkr/3");
+        assert_eq!(p0["programm"], "claude");
+        assert_eq!(p0["zustand"], "working");
+        assert_eq!(p0["titel"], "baut #8932");
+        assert_eq!(p0["fenster_name"], "ai-brain");
+        assert_eq!(p0["seit"], 42);
+        assert_eq!(p0["meta"], "opus 5 · 300k");
+
+        // Auch eine Shell ohne Agent wird aufgeführt: Ein Befehl soll dort
+        // laufen können, und ohne Adresse findet sie niemand.
+        assert_eq!(s0["fenster_panes"][1]["adresse"], "imkr/0");
+        assert_eq!(s0["fenster_panes"][1]["zustand"], "");
+    }
+
+    #[test]
+    fn sitzungen_filter_ist_eine_positivliste_und_keine_sperrliste() {
+        // Der eigentliche Grund für die Positivliste: ein Feld, das eine
+        // spätere imkr-Fassung dazulegt. Eine Sperrliste gegen `tail` hätte
+        // dieses hier still durchgelassen.
+        let roh = r#"[{"name":"x","panes":1,"windows":1,"geheimnis":"im Kopf",
+            "all_panes":[{"pane":1,"program":"bash","vorschau":"noch mehr Inhalt",
+                          "zwischenablage":"ein Token"}]}]"#;
+
+        let gefiltert = sitzungen_filtern(roh).expect("filtern");
+
+        for fremd in ["geheimnis", "im Kopf", "vorschau", "zwischenablage", "ein Token"] {
+            assert!(
+                !gefiltert.contains(fremd),
+                "\u{201e}{fremd}\u{201c} kam durch: {gefiltert}"
+            );
+        }
+    }
+
+    #[test]
+    fn sitzungen_filter_nennt_eine_schlafende_sitzung_als_solche() {
+        let roh = r#"[{"name":"alt","panes":4,"windows":2,"dormant":"stopped",
+            "dormant_since":1700000000}]"#;
+
+        let v: serde_json::Value =
+            serde_json::from_str(&sitzungen_filtern(roh).unwrap()).unwrap();
+
+        assert_eq!(v["sitzungen"][0]["ruht"], "stopped");
+        // Keine Adressen: Dort ist nichts zu lesen, und erfundene Adressen
+        // wären Arbeit, die ins Leere läuft.
+        assert_eq!(v["sitzungen"][0]["fenster_panes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn sitzungen_filter_lehnt_unlesbares_ab_statt_es_durchzulassen() {
+        assert!(sitzungen_filtern("keine Sitzungen hier").is_err());
+        assert!(sitzungen_filtern(r#"{"name":"x"}"#).is_err());
+        // Leer ist in Ordnung: ein Rechner ohne Sitzung ist eine Auskunft.
+        let v: serde_json::Value = serde_json::from_str(&sitzungen_filtern("[]").unwrap()).unwrap();
+        assert_eq!(v["sitzungen"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn sitzungen_filter_haelt_die_ECHTE_form_von_imkr_ls_json_fest() {
+        // Wortwörtlich aus `imkr ls --json` auf codingmachine am 27.10.2026,
+        // nur um ein `tail` ergänzt — das liefert imkr bei einem wartenden
+        // Agenten, und dieser Testlauf hatte gerade keinen.
+        //
+        // **Gegen die Quelle, nicht gegen eine Beschreibung.** Beim Bau der
+        // eingebetteten Oberfläche (#530) war ein erfundenes Protokoll der
+        // teuerste Fehler des Tages. Ein Feld, das imkr umbenennt, fällt hier
+        // auf — und nicht erst daran, dass ein Agent leere Programmnamen liest.
+        let roh = r#"[{"name":"avatar-imkr","panes":2,"windows":2,
+            "agents":{"working":1},
+            "agent_panes":[{"pane":1,"program":"claude","workspace":2,"dir":"avatar",
+              "state":"working","since":883,"meta":"opus 5 \u00b7 252k",
+              "tail":"Soll ich das Passwort nehmen?","title":"Avatar findet imkr-Sessions"}],
+            "all_panes":[
+              {"pane":0,"program":"zsh","workspace":1,"dir":"codingmachine","state":"",
+               "since":0,"title":"codingmachine@omarchy:~"},
+              {"pane":1,"program":"claude","workspace":2,"dir":"avatar","state":"working",
+               "since":883,"meta":"opus 5 \u00b7 252k",
+               "tail":"Soll ich das Passwort nehmen?","title":"Avatar findet imkr-Sessions"}]}]"#;
+
+        let gefiltert = sitzungen_filtern(roh).expect("filtern");
+
+        // Das `tail` steckt hier in BEIDEN Listen. `agent_panes` ist eine
+        // Teilmenge von `all_panes`; der Filter liest nur die zweite, und
+        // damit kann die erste auch nichts durchlassen.
+        assert!(
+            !gefiltert.contains("Passwort") && !gefiltert.contains("agent_panes"),
+            "{gefiltert}"
+        );
+
+        let v: serde_json::Value = serde_json::from_str(&gefiltert).unwrap();
+        let panes = v["sitzungen"][0]["fenster_panes"].as_array().unwrap();
+
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0]["adresse"], "avatar-imkr/0");
+        assert_eq!(panes[0]["programm"], "zsh");
+        assert_eq!(panes[1]["adresse"], "avatar-imkr/1");
+        assert_eq!(panes[1]["programm"], "claude");
+        assert_eq!(panes[1]["titel"], "Avatar findet imkr-Sessions");
+        assert_eq!(panes[1]["fenster"], 2);
+    }
+
+    #[test]
+    fn eine_abgelehnte_sitzungsliste_findet_ihren_auftrag() {
+        assert_eq!(
+            abgelehnter_auftrag(r#"{"art":"sitzungen","auftrag":"a1"}"#),
+            Some(serde_json::json!("a1"))
+        );
     }
 
     #[test]

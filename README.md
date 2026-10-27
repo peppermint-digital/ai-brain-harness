@@ -838,6 +838,49 @@ Das Protokoll (`leitung.log` neben der Verbindung, `leitung status` nennt den
 Pfad) wird über Neustarts fortgeschrieben, damit die letzten Zeilen vor einem
 Abriss erhalten bleiben. Ab 1 MB liegt der alte Teil als `leitung.log.1`.
 
+### Was ein Agent über die Leitung darf
+
+Über dieselbe Leitung kommen nicht nur Tastendrücke eines Menschen, sondern
+auch Aufträge der MCP-Werkzeuge eines Channels (`imkr-sitzungen`, `imkr-lesen`,
+`imkr-befehl`). Jeder Auftrag ist eine **eigene Art**, und jede Art hat ihre
+eigene Befehlszeile, die der Harness selbst baut:
+
+| Art | Ausgeführt wird | Nutzlast | Freigabe in AI Brain |
+|---|---|---|---|
+| `sitzungen` | `imkr ls --json` | nur `auftrag`, `frist` | „darf Panes sehen" |
+| `lesen` | `imkr read <pane> --lines <n>` | `pane`, `zeilen` | „darf Panes sehen" |
+| `befehl` | der mitgeschickte Befehl im Pane | `pane`, `befehl` | „darf Befehle schicken" |
+
+**Warum das drei Arten sind und nicht eine mit Text darin.** Wäre „auflisten"
+ein `befehl` mit `imkr ls --json` als Text, hinge die Grenze zwischen sehen
+und befehlen an einer Zeichenkette, die der Aufrufer formuliert: Wer
+`imkr ls --json; rm -rf ~` schreiben kann, hat aus einem Leserecht ein
+Ausführungsrecht gemacht, ohne irgendeine Prüfung zu umgehen. Deshalb tragen
+`sitzungen` und `lesen` **kein Textfeld** — bei `sitzungen` nicht einmal eine
+Zahl. Es gibt nichts, in das ein Befehl passen würde.
+
+Kein `--all`: Das würde über ssh die Nachbarrechner befragen. Der Harness
+bleibt strikt lokal, und eine Freigabe gilt für **diesen** Rechner.
+
+**`sitzungen` schickt keine Bildschirminhalte.** `imkr ls --json` legt zu einem
+wartenden Agenten ein `tail` bei — den unteren Rand seines Bildschirms. Der
+Harness projiziert die Antwort deshalb auf eine **Positivliste**: Pro Pane
+gehen `adresse` (`sitzung/nummer`, genau die Form, die `lesen` und `befehl`
+erwarten), `fenster`, `fenster_name`, `programm`, `zustand`, `seit`, `meta`
+und `titel` heraus, pro Sitzung Name, Fenster- und Pane-Zahl, die
+Zustandszählung und `ruht`. Alles andere nicht.
+
+Positivliste und nicht ein Verbot von `tail`: Beides wirkt heute gleich, der
+Unterschied kommt mit der nächsten imkr-Fassung. Legt die ein Feld dazu — eine
+Vorschau, eine Zwischenablage —, fährt es bei einer Sperrliste still mit. Hier
+muss jemand es erst hinschreiben. Gefiltert wird auf dem **Rechner**, nicht bei
+AI Brain: Was einmal draußen ist, steht in einem Auftragsbuch und einem
+Protokoll, und das holt ein nachträglicher Filter nicht mehr ein.
+
+Lässt sich die Antwort nicht zerlegen, wird der Auftrag **abgelehnt** statt
+ungefiltert gemeldet — was wir nicht lesen können, können wir auch nicht
+säubern.
+
 ### Der Tray
 
 `ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop. Es
