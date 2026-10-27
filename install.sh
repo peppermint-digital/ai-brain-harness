@@ -185,12 +185,43 @@ ist_codingmachine() {
     return 1
 }
 
+# Gibt es hier eine Leiste, die ein Symbol annimmt?
+#
+# Die Frage ist je Plattform eine andere, und sie muss je Plattform neu
+# beantwortet werden:
+#
+#   Linux   ein org.kde.StatusNotifierWatcher auf dem Sitzungsbus
+#   macOS   eine Fenster-Sitzung (launchctl managername sagt Aqua)
+#   sonst   nein
+hat_tray_sitzung() {
+    case "$(uname -s)" in
+        Linux)  hat_tray_linux ;;
+        Darwin) hat_tray_macos ;;
+        *)      return 1 ;;
+    esac
+}
+
+# macOS hat immer eine Menueleiste — wenn man in einer Fenster-Sitzung sitzt.
+# Ueber SSH oder aus einem Dienst heraus sagt `launchctl managername`
+# `Background` bzw. `StandardIO`, und dort gaebe es nichts, woran ein
+# NSStatusItem haengen koennte.
+#
+# Das ist weniger genau als der Watcher unter Linux: Es sagt „hier ist eine
+# Sitzung", nicht „hier nimmt etwas Symbole an". Mehr ist unter macOS nicht zu
+# holen — dafuer ist der stille Fall, den der Watcher abfaengt (Tray startet,
+# bleibt aber unsichtbar), dort nicht bekannt: Die Menueleiste ist Teil des
+# Systems und kein Programm, das fehlen kann.
+hat_tray_macos() {
+    command -v launchctl >/dev/null 2>&1 || return 1
+    [ "$(launchctl managername 2>/dev/null)" = "Aqua" ]
+}
+
 # Eine Desktop-Sitzung MIT einer Leiste, die StatusNotifierItem bedient.
 #
 # Beides muss stimmen. Ohne Sitzungsbus findet der Tray niemanden; ohne Watcher
 # startet er und bleibt unsichtbar — der unangenehmere Fall, weil nichts
 # darauf hinweist.
-hat_tray_sitzung() {
+hat_tray_linux() {
     [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || return 1
 
     if command -v busctl >/dev/null 2>&1; then
@@ -233,12 +264,22 @@ tray_erwuenscht() {
         return 0
     fi
 
-    # ksni spricht StatusNotifierItem ueber D-Bus. Unter macOS und Windows gibt
-    # es das nicht; dort waere der Tray ein eigenes Programm mit eigener
-    # Signaturfrage.
-    if [ "$(uname -s)" != "Linux" ]; then
-        return 1
-    fi
+    # Bis zum 27.10.2026 stand hier ein Riegel gegen alles, was nicht Linux
+    # ist, mit der Begruendung: ksni spricht StatusNotifierItem ueber D-Bus,
+    # und das gibt es unter macOS und Windows nicht — ein Tray dort waere ein
+    # eigenes Programm mit eigener Signaturfrage.
+    #
+    # Die Technik stimmte, die Folgerung nicht: Der Tray haelt seit v0.3.0
+    # beide Leisten in EINEM Programm (ksni unter Linux, tray-icon unter macOS
+    # und Windows). Die Signaturfrage ist entschieden — unsigniert ausliefern
+    # und es ehrlich ansagen, siehe `tray_signatur_hinweis`.
+    #
+    # Windows faellt hier trotzdem heraus: Dieses Skript ist POSIX-sh, dort
+    # laeuft `install.ps1`.
+    case "$(uname -s)" in
+        Linux|Darwin) : ;;
+        *)            return 1 ;;
+    esac
 
     if ist_codingmachine; then
         say "Kein Tray auf der codingmachine — dort sitzt niemand vor dem Bildschirm."
@@ -285,6 +326,33 @@ tray_holen() {
     return 1
 }
 
+# Was der Nutzer ueber die fehlende Signatur wissen muss — bevor es ihn
+# ueberrascht.
+#
+# Der Tray ist nicht signiert (Entscheidung vom 27.10.2026: jetzt ausliefern,
+# Signierung im Workflow vorbereitet). Das ist kein Grund zur Sorge, aber ein
+# Grund zur Ansage: Eine Warnung, die unerwartet kommt, sieht wie ein
+# kaputtes Programm aus. Eine, die angekuendigt wurde, ist eine Fussnote.
+#
+# Unter macOS ist der haeufige Fall ausdruecklich NICHT betroffen: `curl`
+# setzt kein `com.apple.quarantine`, also startet das Programm ohne
+# Rueckfrage. Gatekeeper meldet sich erst, wenn die Datei das Merkmal doch
+# traegt — etwa weil sie im Browser geholt oder aus einem Archiv entpackt
+# wurde. Genau dieser Unterschied gehoert dazugesagt, sonst sucht man den
+# Fehler an der falschen Stelle.
+tray_signatur_hinweis() {
+    [ "$(uname -s)" = "Darwin" ] || return 0
+
+    say ""
+    say "Hinweis: Der Tray ist nicht signiert (noch kein Apple-Zertifikat)."
+    say "So, wie er hier ankommt — per curl —, startet er trotzdem ohne"
+    say "Rueckfrage: curl setzt kein Quarantaene-Merkmal."
+    say "Sollte Gatekeeper sich doch melden (\"kann nicht geoeffnet werden,"
+    say "weil der Entwickler nicht verifiziert werden kann\"), hilft eins von:"
+    say "  xattr -d com.apple.quarantine $INSTALL_DIR/$TRAY_NAME"
+    say "  oder: Systemeinstellungen → Datenschutz & Sicherheit → \"Dennoch oeffnen\""
+}
+
 tray_anbieten() {
     tray_erwuenscht || return 0
 
@@ -298,6 +366,8 @@ tray_anbieten() {
     fi
 
     say "Tray installiert: $INSTALL_DIR/$TRAY_NAME"
+
+    tray_signatur_hinweis
 
     # „Nur auf Nachfrage" heisst: ein Mensch sagt ja.
     #
@@ -321,8 +391,11 @@ tray_anbieten() {
 
     case "$antwort" in
         j|J|ja|Ja|JA|y|Y|yes|Yes)
+            # Wo der Autostart landet, sagt das Programm selbst — unter
+            # Linux ~/.config/autostart, unter macOS ein LaunchAgent. Diese
+            # Zeile wuerde sonst auf einem Mac etwas Falsches behaupten.
             if "$INSTALL_DIR/$TRAY_NAME" --autostart; then
-                say "Autostart eingerichtet (~/.config/autostart)."
+                :
             else
                 say "Autostart liess sich nicht einrichten."
             fi

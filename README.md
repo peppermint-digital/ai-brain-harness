@@ -840,9 +840,8 @@ Abriss erhalten bleiben. Ab 1 MB liegt der alte Teil als `leitung.log.1`.
 
 ### Der Tray
 
-`ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop (Linux,
-StatusNotifier, z. B. waybar). Es zeigt **zwei** Zustände und schaltet einen
-davon. Die Regeln bleiben im Harness: der Tray ruft nur `leitung status
+`ai-brain-tray` ist ein eigenes Programm für Arbeitsrechner mit Desktop. Es
+zeigt **zwei** Zustände und schaltet einen davon. Die Regeln bleiben im Harness: der Tray ruft nur `leitung status
 --json`, `an` und `aus`.
 
 ```bash
@@ -856,8 +855,25 @@ ai-brain-tray --pruefen                     # gibt es hier eine Leiste?
 | Zeile | Was sie sagt |
 |---|---|
 | `Mit AI Brain verbunden (Gerät …)` | Es liegt ein Gerätezugang vor. |
-| `Live-Leitung: an, noch 2 h` / `aus` | Der Schalter aus `leitung an`/`aus`. |
+| `Live-Leitung (AI Brain sieht deine Panes): an, noch 2 h` / `aus` | Der Schalter aus `leitung an`/`aus`. |
 | `Verbunden, zeigt bau/2` | Wie es der laufenden Leitung geht. |
+
+Der Zusatz in Klammern ist länger als schön. `Live-Leitung: aus` versteht aber
+nur, wer weiß, was die Leitung tut — und ein Schalter, dessen Wirkung man nicht
+kennt, wird entweder nie oder versehentlich benutzt.
+
+Der **Gerätename** kommt aus AI Brain, nicht aus der `connection.json`: Dort
+steht er als Abschrift vom Kopplungstag, und wer den Zugang später unter „Meine
+Geräte" umbenennt, ändert sie nicht mit. Gemeldet wurde das am Tray — dort stand
+`Gerät omarchy (linux x86_64)`, und weil Desktop und Laptop beide `omarchy`
+heißen, war die Anzeige richtig und trotzdem nutzlos.
+
+`GET /api/v1/geraete/ich` nennt den Namen; der Harness legt ihn als
+`geraet.json` neben die Verbindung und fragt höchstens alle sechs Stunden neu.
+Mit vier Sekunden Frist statt fünfzehn, und der Zeitstempel wird **vor** der
+Anfrage geschrieben: Der Tray liest den Status im Zwei-Sekunden-Takt, und eine
+Instanz, die nicht antwortet, darf ihn nicht bei jedem Takt hängen lassen. Bis
+eine Antwort kommt, steht der Name vom Koppeln da — nie ein leerer Platz.
 
 Bis zum 27.10.2026 stand dort nur `Live: aus` — und das hat wie **nicht
 verbunden** gewirkt, obwohl der Rechner an seiner Instanz hing. Zwei Zustände
@@ -873,6 +889,13 @@ ohnehin, ob sie steht.
 
 - **Linksklick** schaltet die Leitung (ein für 30 min, oder aus).
 - **Rechtsklick** öffnet das Menü: Dauern, Protokoll, Beenden.
+
+Das **Schließen** des aufgeklappten Menüs gehört der Leiste, nicht dem Tray:
+StatusNotifierItem kennt keinen Weg, ein Menü von der Anwendung aus
+zuzumachen. Unter Omarchy (quickshell, `plugins/bar/widgets/Tray.qml`) hängt
+das Popup an einem `HyprlandFocusGrab`, in dem das Leistenfenster selbst
+steht — ein Klick auf das Symbol löst den Grab deshalb nicht, ein Klick
+irgendwo sonst schon. Esc ist dort nicht verdrahtet.
 
 Der Linksklick fehlte bis zum 27.10.2026. In den meisten Leisten öffnet der
 *Rechtsklick* das Menü, der Linksklick löst `Activate` aus — ohne Handler tat
@@ -901,22 +924,73 @@ im `PATH` (oder unter `AI_BRAIN_HARNESS`). Autostart startet ihn ohne die Shell
 des Nutzers, und dort fehlt `~/.local/bin` im `PATH` regelmäßig — er hing dann
 in der Leiste und fand sein eigenes Programm nicht.
 
+#### Ein Programm, drei Leisten
+
+| | Leiste | Kiste | Autostart |
+|---|---|---|---|
+| Linux | StatusNotifierItem (D-Bus) | `ksni` | `~/.config/autostart/*.desktop` |
+| macOS | NSStatusItem | `tray-icon` + `tao` | `~/Library/LaunchAgents` |
+| Windows | Shell_NotifyIcon | `tray-icon` + `tao` | Run-Key unter `HKCU` |
+
+Bis zum 27.10.2026 gab es ihn nur für Linux, mit der Begründung: ksni spricht
+D-Bus, das gibt es dort nicht, ein Tray wäre ein **eigenes Programm**. Richtig
+war die Technik, falsch die Folgerung — ein eigenes Programm wäre eine zweite
+Bedienung, die auseinanderläuft. Jetzt ist nur das Anbinden an die Leiste je
+Plattform eigen; was angezeigt wird (`ansicht`), wie das Symbol aussieht
+(`symbol`), was ein Klick tut (`kern`) und wie der Harness gefunden wird
+(`harness`) ist geteilt und ohne Plattformbezug — also überall testbar.
+
+Unter Windows **kein** Autostart-Ordner: Dort müsste eine `.lnk` liegen, und die
+schreibt man nicht ohne COM; eine `.cmd` an derselben Stelle würde bei jeder
+Anmeldung ein Konsolenfenster aufblitzen lassen. Der Run-Key unter `HKCU`
+braucht keine Administratorrechte und zeigt kein Fenster.
+
 #### Er kommt mit der Installation — aber nicht überall
 
-`install.sh` bringt ihn mit, und zwar nur dort, wo er etwas anzeigen kann:
+`install.sh` (Linux, macOS) und `install.ps1` (Windows) bringen ihn mit, und
+zwar nur dort, wo er etwas anzeigen kann. Die Frage „gibt es hier eine Leiste"
+ist je Plattform eine andere:
 
-- **Linux.** ksni spricht StatusNotifierItem über D-Bus; unter macOS und Windows
-  gibt es das nicht. Ein Tray dort wäre ein eigenes Programm und bräuchte eine
-  Signatur — diese Entscheidung steht noch aus.
-- **Eine Desktop-Sitzung mit Leiste.** Geprüft wird beides:
-  `DBUS_SESSION_BUS_ADDRESS` *und* ein `org.kde.StatusNotifierWatcher` auf dem
-  Sitzungsbus. Ohne Bus findet der Tray niemanden; ohne Watcher startet er und
-  bleibt **unsichtbar** — der unangenehmere Fall, weil nichts darauf hinweist.
+- **Linux.** `DBUS_SESSION_BUS_ADDRESS` *und* ein
+  `org.kde.StatusNotifierWatcher` auf dem Sitzungsbus. Ohne Bus findet der Tray
+  niemanden; ohne Watcher startet er und bleibt **unsichtbar** — der
+  unangenehmere Fall, weil nichts darauf hinweist.
+- **macOS.** `launchctl managername` muss `Aqua` sagen, also eine
+  Fenster-Sitzung. Über SSH steht dort `Background` oder `StandardIO`.
+- **Windows.** `SESSIONNAME` darf nicht `Services` sein.
+
+Die beiden letzten sind weniger genau als der Watcher: Sie sagen „hier ist eine
+Sitzung", nicht „hier nimmt etwas Symbole an". Mehr ist dort nicht zu holen —
+dafür ist der stille Fall, den der Watcher abfängt, dort auch nicht bekannt:
+Menüleiste und Infobereich sind Teil des Systems, nicht ein Programm, das
+fehlen kann. `ai-brain-tray --pruefen` beantwortet die Frage je Plattform mit
+dem Rückgabewert.
+
 - **Nie auf der codingmachine.** Dort läuft AI Brain selbst. Sie *hat* eine
   Desktop-Sitzung, die Prüfung darüber fängt sie also nicht ab; es braucht einen
   eigenen Riegel. Erkannt wird sie am Benutzernamen und am imkr-Namen, **nicht
   am Hostnamen**: der lautet `omarchy` und damit genauso wie auf jedem anderen
   Omarchy-Rechner.
+
+#### Unsigniert — und das wird angesagt
+
+Entscheidung vom 27.10.2026 (Bastian): **jetzt ausliefern**, unsigniert. Die
+Signier- und Notarisierungsschritte stehen im Release-Workflow bereit und
+laufen, sobald die Zertifikate als Secrets hinterlegt sind; fehlen sie, werden
+sie übersprungen — ein Release, das ohne Zertifikat rot wird, hielte die
+Auslieferung für alle auf.
+
+Die Installationsausgabe sagt es, statt es den Nutzer finden zu lassen:
+
+- **macOS.** Per `curl` geholt startet der Tray **ohne** Rückfrage: curl setzt
+  kein `com.apple.quarantine`. Nur wenn die Datei das Merkmal doch trägt (im
+  Browser geholt, aus einem Archiv entpackt), blockt Gatekeeper — dann
+  `xattr -d com.apple.quarantine …` oder „Dennoch öffnen" in den
+  Systemeinstellungen. Genau dieser Unterschied gehört dazu, sonst sucht man
+  den Fehler an der falschen Stelle.
+- **Windows.** Das Skript entfernt die Herunterladen-Markierung schon
+  (`Unblock-File`), damit SmartScreen meist gar nicht erst fragt. Tut es es
+  doch: „Weitere Informationen" → „Trotzdem ausführen".
 
 Der Autostart wird **gefragt**, nicht gesetzt. Und gefragt wird über `/dev/tty`,
 nicht über die Standardeingabe: Das Skript läuft über `curl | sh`, dort ist die
@@ -929,10 +1003,11 @@ gefragt und nichts eingerichtet.
 | `AI_BRAIN_TRAY=0` | nie anbieten |
 | `AI_BRAIN_TRAY=1` | anbieten, auch wenn die Erkennung daneben liegt |
 
-Auf der Instanz holt `php artisan companion:fetch` den Tray mit; ausgeliefert
-wird er unter `/install/tray/<ziel>`, und `/install.json` nennt ihn unter
-`tray` — getrennt von `available`, weil das PowerShell-Skript dort den ersten
-Windows-Eintrag nimmt und darin nichts liegen darf, was kein Harness ist.
+Auf der Instanz holt `php artisan companion:fetch` die Trays mit (Linux, beide
+macOS-Architekturen, Windows); ausgeliefert werden sie unter
+`/install/tray/<ziel>`, und `/install.json` nennt sie unter `tray` — getrennt
+von `available`, weil das PowerShell-Skript dort den ersten Windows-Eintrag
+nimmt und darin nichts liegen darf, was kein Harness ist.
 
 ## Der eigene Loop
 

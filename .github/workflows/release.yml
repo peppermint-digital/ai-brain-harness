@@ -6,9 +6,34 @@ name: Release
 # nach macOS bräuchte das Apple-SDK und ist die deutlich mühsamere Variante.
 # Für öffentliche Repositories sind macOS- und Windows-Läufer kostenlos.
 #
-# Signieren ist bewusst NICHT dabei: Ein Programm, das per curl im Terminal
-# ankommt, bekommt unter macOS kein Quarantäne-Merkmal und läuft ohne Signatur.
-# Nötig wäre sie für .dmg/.pkg oder alles, was jemand im Finder doppelklickt.
+# ## Signieren: vorbereitet, aber nur mit Schlüsseln (Stand 27.10.2026)
+#
+# Hier stand bis zum 27.10.2026: „Signieren ist bewusst NICHT dabei: Ein
+# Programm, das per curl im Terminal ankommt, bekommt unter macOS kein
+# Quarantäne-Merkmal und läuft ohne Signatur. Nötig wäre sie für .dmg/.pkg
+# oder alles, was jemand im Finder doppelklickt."
+#
+# Das galt, solange nur die CLI ausgeliefert wurde. Der Tray ist etwas
+# anderes: Er steht in der Leiste, startet beim Anmelden und wird angeklickt.
+# Bastian hat am 27.10.2026 entschieden, ihn **jetzt unsigniert**
+# auszuliefern und die Signierschritte vorzubereiten — sie laufen, sobald die
+# Schlüssel als Secrets hinterlegt sind, und werden sonst übersprungen.
+#
+# **Übersprungen, nicht gescheitert.** Ein Release, das ohne Zertifikat rot
+# wird, hält die Auslieferung für alle auf — wegen einer Verbesserung, die
+# niemand bestellt hat. Deshalb entscheidet ein eigener Schritt zuerst, was
+# überhaupt da ist, und die Signierschritte hängen an seinem Ergebnis.
+#
+# Was dafür hinterlegt werden muss (alles optional):
+#
+# | Secret | Wofür |
+# |---|---|
+# | `APPLE_CERT_P12` | „Developer ID Application"-Zertifikat, base64 |
+# | `APPLE_CERT_PASSWORT` | Passwort des p12 |
+# | `APPLE_SIGNATUR_ID` | Name der Identität, z. B. `Developer ID Application: … (TEAMID)` |
+# | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORT` | für die Notarisierung |
+# | `WINDOWS_CERT_PFX` | Code-Signing-Zertifikat, base64 |
+# | `WINDOWS_CERT_PASSWORT` | Passwort des pfx |
 
 on:
   push:
@@ -35,14 +60,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `tray: true` ueberall (seit 27.10.2026). Vorher nur hier, weil
+          # ksni StatusNotifierItem ueber D-Bus spricht und es das unter macOS
+          # und Windows nicht gibt. Richtig war daran die Technik, falsch die
+          # Folgerung: Der Tray haelt jetzt beide Leisten in EINEM Programm
+          # (ksni unter Linux, tray-icon + tao unter macOS und Windows).
           - os: ubuntu-latest
             ziel: x86_64-unknown-linux-gnu
             datei: ai-brain-harness
-            # Nur hier wird der Tray mitgebaut: ksni spricht
-            # StatusNotifierItem ueber D-Bus, und das gibt es unter macOS und
-            # Windows nicht. Ein Tray fuer die beiden waere ein eigenes
-            # Programm und braeuchte eine Signatur — beides wartet auf eine
-            # Entscheidung, nicht auf diesen Workflow.
             tray: true
           # Beide macOS-Ziele auf demselben Laeufer: Das SDK bringt beide
           # Architekturen mit, Rust kann von Apple Silicon nach Intel bauen.
@@ -54,12 +79,15 @@ jobs:
           - os: macos-latest
             ziel: aarch64-apple-darwin
             datei: ai-brain-harness
+            tray: true
           - os: macos-latest
             ziel: x86_64-apple-darwin
             datei: ai-brain-harness
+            tray: true
           - os: windows-latest
             ziel: x86_64-pc-windows-msvc
             datei: ai-brain-harness.exe
+            tray: true
 
     steps:
       - uses: actions/checkout@v4
@@ -88,8 +116,146 @@ jobs:
         if: matrix.tray
         shell: bash
         run: |
-          cp "target/${{ matrix.ziel }}/release/ai-brain-tray" \
-             "dist/ai-brain-tray-${{ matrix.ziel }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.ziel }}/release/ai-brain-tray.exe" \
+               "dist/ai-brain-tray-${{ matrix.ziel }}.exe"
+          else
+            cp "target/${{ matrix.ziel }}/release/ai-brain-tray" \
+               "dist/ai-brain-tray-${{ matrix.ziel }}"
+          fi
+
+      # ------------------------------------------------------------------
+      # Signieren — nur, wenn die Schluessel da sind
+      # ------------------------------------------------------------------
+      #
+      # Warum ein eigener Schritt und kein `if: secrets.X != ''`: In der
+      # `if`-Bedingung eines Schritts steht der `secrets`-Kontext nicht zur
+      # Verfuegung, und Secrets als Auftrags-Umgebung zu setzen, legt sie
+      # JEDEM Schritt vor — auch `cargo build`. Hier liest ein Schritt sie,
+      # gibt nur ein ja/nein weiter, und die Schluessel selbst bleiben in den
+      # Schritten, die sie brauchen.
+      - name: Liegen Schluessel bereit?
+        id: schluessel
+        shell: bash
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_APP_PASSWORT: ${{ secrets.APPLE_APP_PASSWORT }}
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          # `if`, nicht `[ … ] && x=ja`: GitHub startet die Shell mit `-e`,
+          # und ein Test, der nein sagt, beendet dann den ganzen Schritt.
+          # „Keine Schluessel" ist hier aber die Normallage.
+          apple=nein; notar=nein; windows=nein
+
+          if [ -n "$APPLE_CERT_P12" ]; then
+            apple=ja
+
+            if [ -n "$APPLE_APP_PASSWORT" ]; then
+              notar=ja
+            fi
+          fi
+
+          if [ -n "$WINDOWS_CERT_PFX" ]; then
+            windows=ja
+          fi
+
+          {
+            echo "apple=$apple"
+            echo "notar=$notar"
+            echo "windows=$windows"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Apple-Zertifikat: $apple, Notarisierung: $notar, Windows-Zertifikat: $windows"
+
+      - name: macOS — signieren
+        if: runner.os == 'macOS' && steps.schluessel.outputs.apple == 'ja'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORT: ${{ secrets.APPLE_CERT_PASSWORT }}
+          APPLE_SIGNATUR_ID: ${{ secrets.APPLE_SIGNATUR_ID }}
+        run: |
+          set -eu
+
+          # Ein eigener Schluesselbund, nicht der Anmeldebund: Der Laeufer ist
+          # ein Wegwerfrechner, und ein Passwort fuer einen Bund, den es in 20
+          # Minuten nicht mehr gibt, ist die harmlose Variante.
+          bund="$RUNNER_TEMP/signieren.keychain-db"
+          bundpass="$(uuidgen)"
+
+          security create-keychain -p "$bundpass" "$bund"
+          security set-keychain-settings -lut 1200 "$bund"
+          security unlock-keychain -p "$bundpass" "$bund"
+
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/zert.p12"
+          security import "$RUNNER_TEMP/zert.p12" -k "$bund" \
+            -P "$APPLE_CERT_PASSWORT" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$bundpass" "$bund" >/dev/null
+          security list-keychains -d user -s "$bund" login.keychain-db
+
+          # `--options runtime` ist Pflicht fuer die Notarisierung, und
+          # `--timestamp` auch: Ohne Zeitstempel verfaellt die Signatur mit
+          # dem Zertifikat, statt den Zeitpunkt zu belegen.
+          for f in dist/*; do
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_SIGNATUR_ID" "$f"
+            codesign --verify --strict --verbose=2 "$f"
+          done
+
+          rm -f "$RUNNER_TEMP/zert.p12"
+
+      - name: macOS — notarisieren
+        if: runner.os == 'macOS' && steps.schluessel.outputs.notar == 'ja'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORT: ${{ secrets.APPLE_APP_PASSWORT }}
+        run: |
+          set -eu
+
+          # notarytool nimmt kein nacktes Programm, nur ein Archiv.
+          ditto -c -k --keepParent dist "$RUNNER_TEMP/zur-notarisierung.zip"
+
+          xcrun notarytool submit "$RUNNER_TEMP/zur-notarisierung.zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORT" \
+            --wait
+
+          # `xcrun stapler` gibt es hier NICHT: Ein Ticket laesst sich nur an
+          # ein Bundle (.app/.dmg/.pkg) heften, nicht an eine nackte
+          # Programmdatei. Gatekeeper fragt fuer die stattdessen online nach —
+          # was reicht, solange der Rechner Netz hat. Wer das nicht will,
+          # braucht ein Bundle, und das ist eine eigene Entscheidung.
+
+      - name: Windows — signieren
+        if: runner.os == 'Windows' && steps.schluessel.outputs.windows == 'ja'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORT: ${{ secrets.WINDOWS_CERT_PASSWORT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'zert.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+
+          # signtool liegt im Windows SDK und ist auf dem Laeufer da, aber
+          # nicht im PATH — deshalb gesucht und die neueste Fassung genommen.
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName | Select-Object -Last 1
+
+          if (-not $signtool) { throw 'signtool.exe nicht gefunden.' }
+
+          # Zeitstempel (/tr) nicht weglassen: Ohne ihn gilt die Signatur nur,
+          # solange das Zertifikat gilt.
+          Get-ChildItem dist | ForEach-Object {
+            & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERT_PASSWORT `
+              /fd sha256 /tr http://timestamp.digicert.com /td sha256 $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool scheiterte an $($_.Name)" }
+          }
+
+          Remove-Item $pfx -Force
 
       - uses: actions/upload-artifact@v4
         with:

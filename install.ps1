@@ -17,9 +17,15 @@
 # Releases; der Umweg über die Instanz bleibt trotzdem der richtige, denn nur
 # sie kennt ihre Adresse.
 #
-# Einen Tray gibt es hier nicht: Er spricht StatusNotifierItem über D-Bus, das
-# gibt es unter Windows nicht. Ein eigenes Programm dafür bräuchte eine
-# Signatur — noch nicht entschieden.
+# Den Tray bringt das Skript der Instanz mit (seit v0.3.0 gibt es ihn auch für
+# Windows: Shell_NotifyIcon über das Crate tray-icon statt StatusNotifierItem).
+#
+# Hier stand bis zum 27.10.2026: „Einen Tray gibt es hier nicht: Er spricht
+# StatusNotifierItem über D-Bus, das gibt es unter Windows nicht. Ein eigenes
+# Programm dafür bräuchte eine Signatur — noch nicht entschieden." Die
+# Technik stimmte, die Folgerung nicht: Es ist dasselbe Programm mit einer
+# zweiten Leiste geworden, und die Signaturfrage ist entschieden —
+# unsigniert ausliefern und die Warnung ansagen.
 
 $ErrorActionPreference = 'Stop'
 
