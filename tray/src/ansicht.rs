@@ -96,6 +96,9 @@ impl Farbe {
     }
 }
 
+/// Wie die Live-Leitung in der Anzeige heisst — mit dem, was sie bedeutet.
+const LEITUNG_WAS: &str = "Live-Leitung (AI Brain sieht deine Panes)";
+
 /// Die ganze Anzeige in einem Stück.
 ///
 /// **Zwei Zeilen, nicht eine.** „aus" allein hat wie „nicht verbunden"
@@ -136,7 +139,7 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
         Wissen::Unbekannt => {
             return Ansicht {
                 verbindung: "Verbindung: wird gelesen …".into(),
-                leitung: "Live-Leitung: …".into(),
+                leitung: format!("{LEITUNG_WAS}: …"),
                 lage: None,
                 quelle: None,
                 farbe: Farbe::Gelb,
@@ -146,7 +149,7 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
         Wissen::Fehler(grund) => {
             return Ansicht {
                 verbindung: "Harness antwortet nicht".into(),
-                leitung: "Live-Leitung: unbekannt".into(),
+                leitung: format!("{LEITUNG_WAS}: unbekannt"),
                 lage: Some(grund.clone()),
                 quelle: None,
                 farbe: Farbe::Rot,
@@ -179,9 +182,19 @@ pub fn ansicht(wissen: &Wissen, jetzt: i64) -> Ansicht {
 
     let an_bis = status.bis.filter(|_| status.an);
 
+    // ## Warum der Zusatz in Klammern dasteht (Stand 27.10.2026)
+    //
+    // „Live-Leitung: aus" allein versteht nur, wer weiss, was die Leitung
+    // tut. Gemeldet am 27.10.2026: Die Zeile sagt nicht, worueber sie
+    // spricht — und ein Schalter, dessen Wirkung man nicht kennt, wird
+    // entweder nie oder versehentlich benutzt.
+    //
+    // Der Zusatz ist laenger als schoen. Das ist der Preis: Die Zeile steht
+    // in einem Menue, das man selten oeffnet, und dort ist Verstaendlichkeit
+    // mehr wert als Kuerze.
     let leitung = match an_bis {
-        Some(bis) => format!("Live-Leitung: an, noch {}", restzeit(bis - jetzt)),
-        None => "Live-Leitung: aus".into(),
+        Some(bis) => format!("{LEITUNG_WAS}: an, noch {}", restzeit(bis - jetzt)),
+        None => format!("{LEITUNG_WAS}: aus"),
     };
 
     let (lage, stoerung, laeuft) = lage_text(status, an_bis.is_some());
@@ -311,7 +324,7 @@ mod tests {
 
         assert_eq!(a.verbindung, "Mit AI Brain verbunden (Gerät laptop)");
         assert_eq!(a.quelle.as_deref(), Some("x"));
-        assert_eq!(a.leitung, "Live-Leitung: aus");
+        assert_eq!(a.leitung, "Live-Leitung (AI Brain sieht deine Panes): aus");
         assert_eq!(a.farbe, Farbe::Blau);
         assert!(!a.gefuellt);
     }
@@ -346,7 +359,10 @@ mod tests {
             0,
         );
 
-        assert_eq!(a.leitung, "Live-Leitung: an, noch 2 h");
+        assert_eq!(
+            a.leitung,
+            "Live-Leitung (AI Brain sieht deine Panes): an, noch 2 h"
+        );
         assert_eq!(a.lage.as_deref(), Some("Verbunden, zeigt bau/2"));
         assert_eq!(a.farbe, Farbe::Gruen);
         assert!(a.gefuellt);
@@ -438,6 +454,28 @@ mod tests {
         );
         assert_eq!(rechnername("brain.example.com"), "brain.example.com");
         assert_eq!(rechnername("https://"), "https://");
+    }
+
+    /// Der Zusatz muss in JEDEM Zustand dastehen, auch im Fehlerfall — sonst
+    /// erklaert sich die Zeile genau dann nicht, wenn man sie liest.
+    #[test]
+    fn die_leitung_erklaert_sich_in_jedem_zustand() {
+        let faelle = [
+            ansicht(&Wissen::Unbekannt, 0),
+            ansicht(&Wissen::Fehler("stumm".into()), 0),
+            ansicht(
+                &da(r#"{"an":false,"bis":null,"prozess":null,"lage":null,"verbindung":null}"#),
+                0,
+            ),
+        ];
+
+        for a in faelle {
+            assert!(
+                a.leitung.contains("AI Brain sieht deine Panes"),
+                "ohne Erklaerung: {}",
+                a.leitung
+            );
+        }
     }
 
     #[test]

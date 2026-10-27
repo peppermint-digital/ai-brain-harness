@@ -354,12 +354,119 @@ pub struct VerbindungKurz {
 /// beides nebeneinander statt einer Zahl, die beides vermischt.
 fn verbindung_zeigen() -> Option<VerbindungKurz> {
     let c = config::load().ok()?;
+    let geraet = geraet_name(&c);
 
     Some(VerbindungKurz {
         instanz: c.instance_name,
-        geraet: c.device_name,
+        geraet,
         basis: c.base_url,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Wie dieser Geraetezugang heisst
+// ---------------------------------------------------------------------------
+
+/// Wo der Name liegt, den AI Brain fuer diesen Zugang fuehrt.
+const GERAET_DATEI: &str = "geraet.json";
+
+/// Wie lange eine Abschrift gilt, bevor neu gefragt wird.
+///
+/// Sechs Stunden: Ein Umbenennen ist selten, und der Name steht in einem
+/// Menue, nicht in einer Abrechnung. Haeufiger zu fragen waere Last ohne
+/// Gegenwert, seltener waere eine Anzeige, die einen halben Tag luegt.
+const GERAET_FRIST: i64 = 6 * 3600;
+
+/// Die Frist fuer genau diese Frage — kurz, siehe `anfrage_frist`.
+const GERAET_HTTP: Duration = Duration::from_secs(4);
+
+#[derive(Serialize, Deserialize)]
+struct GeraetAbschrift {
+    name: String,
+    /// Zu welchem Zugang der Name gehoert. Ohne das wuerde nach einem
+    /// `disconnect` + neuem `connect` der Name des ALTEN Zugangs weiterstehen.
+    client_id: String,
+    /// Wann zuletzt gefragt wurde (Unix-Sekunden) — nicht, wann geantwortet
+    /// wurde: Ein Fehlschlag soll die Frist genauso starten, sonst fragt jeder
+    /// Aufruf neu und wartet.
+    gefragt: i64,
+}
+
+/// Der Name des Geraetezugangs, wie AI Brain ihn fuehrt.
+///
+/// ## Warum nicht einfach `connection.device_name` (Stand 27.10.2026)
+///
+/// Der steht dort als **Abschrift vom Kopplungstag**. Wer den Zugang spaeter
+/// unter „Meine Geraete" umbenennt, aendert ihn nicht mit. Gemeldet wurde das
+/// am Tray: Dort stand `Gerät omarchy (linux x86_64)` — der Hostname, und
+/// weil Desktop und Laptop beide `omarchy` heissen, war die Anzeige richtig
+/// und trotzdem nutzlos.
+///
+/// Gefragt wird hoechstens alle sechs Stunden, und der Zeitstempel wird VOR
+/// der Anfrage geschrieben: Eine Instanz, die nicht antwortet, kostet dann
+/// einmal vier Sekunden und nicht bei jedem Aufruf.
+fn geraet_name(c: &Connection) -> String {
+    let abschrift = ablage(GERAET_DATEI)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|roh| serde_json::from_str::<GeraetAbschrift>(&roh).ok())
+        .filter(|a| a.client_id == c.client_id);
+
+    if let Some(a) = &abschrift {
+        if a.gefragt + GERAET_FRIST > jetzt() {
+            return a.name.clone();
+        }
+    }
+
+    // Was wir bis zur Antwort zeigen: die alte Abschrift, sonst der Name vom
+    // Koppeln. Nie ein leerer Platz — „kein Name" ist keine Auskunft.
+    let bisher = abschrift
+        .map(|a| a.name)
+        .unwrap_or_else(|| c.device_name.clone());
+
+    geraet_merken(c, &bisher);
+
+    match geraet_fragen(c) {
+        Some(neu) if neu != bisher => {
+            geraet_merken(c, &neu);
+            neu
+        }
+        _ => bisher,
+    }
+}
+
+fn geraet_merken(c: &Connection, name: &str) {
+    let Ok(pfad) = ablage(GERAET_DATEI) else {
+        return;
+    };
+
+    if let Some(ordner) = pfad.parent() {
+        let _ = std::fs::create_dir_all(ordner);
+    }
+
+    let abschrift = GeraetAbschrift {
+        name: name.to_string(),
+        client_id: c.client_id.clone(),
+        gefragt: jetzt(),
+    };
+
+    let _ = std::fs::write(
+        &pfad,
+        serde_json::to_string(&abschrift).unwrap_or_default(),
+    );
+}
+
+fn geraet_fragen(c: &Connection) -> Option<String> {
+    let text = anfrage_frist(c, "GET", "geraete/ich", None, GERAET_HTTP).ok()?;
+
+    let name = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("name")?
+        .as_str()?
+        .trim()
+        .to_string();
+
+    (!name.is_empty()).then_some(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -796,11 +903,27 @@ fn anfrage(
     pfad: &str,
     rumpf: Option<&str>,
 ) -> Result<String, HttpFehler> {
+    anfrage_frist(c, methode, pfad, rumpf, FRIST_HTTP)
+}
+
+/// Dasselbe mit eigener Frist.
+///
+/// Fuer Aufrufe, die in einem Pfad liegen, der auf nichts warten darf: Der
+/// Tray liest `leitung status --json` im Zwei-Sekunden-Takt, und eine Instanz,
+/// die 15 s nicht antwortet, haette dort einen sichtbar haengenden Tray zur
+/// Folge.
+fn anfrage_frist(
+    c: &Connection,
+    methode: &str,
+    pfad: &str,
+    rumpf: Option<&str>,
+    frist: Duration,
+) -> Result<String, HttpFehler> {
     for versuch in 0..2 {
         let token = mcp::access_token(c).map_err(HttpFehler::Sonst)?;
 
         let anfrage = ureq::request(methode, &api_url(c, pfad))
-            .timeout(FRIST_HTTP)
+            .timeout(frist)
             .set("Accept", "application/json")
             .set("Authorization", &format!("Bearer {token}"));
 
