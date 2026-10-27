@@ -65,8 +65,9 @@ Aufrufe:
   ai-brain-tray --kein-autostart
 
 Bedienung:
-  Linksklick    Live-Leitung an (30 min) bzw. aus
-  Rechtsklick   Menue mit Dauern, Protokoll und Beenden
+  Linksklick    AI Brain im Browser oeffnen
+  Rechtsklick   Menue: Haekchen „Live-Leitung“, Dauern, AI Brain, Protokoll,
+                Beenden
 
 Das Symbol: grau nicht verbunden, blau verbunden, gruen Leitung laeuft,
 gelb unterwegs, rot gestoert. Gefuellt heisst Leitung an, hohl heisst aus.

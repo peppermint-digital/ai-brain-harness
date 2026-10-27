@@ -3,7 +3,8 @@
 //! Die Leisten sind drei (StatusNotifierItem, NSStatusItem, Shell_NotifyIcon),
 //! die Bedienung ist eine. Alles, was mehr als Zeichnen ist, steht deshalb
 //! hier: welcher Harness-Aufruf zu welchem Menüpunkt gehört, was ein
-//! Linksklick heisst, und wie ein Fehler aus dem Hintergrund zurückkommt.
+//! Linksklick heisst ({@link Kern::brain_oeffnen}), und wie ein Fehler aus dem
+//! Hintergrund zurückkommt.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -105,9 +106,11 @@ impl Kern {
     /// überlassen — und ein Symbolklick, der etwas schaltet, ist in keiner
     /// anderen Leiste so.
     ///
-    /// Jetzt öffnet der Linksklick das Menü (`ItemIsMenu`, siehe `linux`),
-    /// und hier hängt das **Häkchen** darin. Haken rein heisst `leitung an`
-    /// und hebt ein Veto auf, Haken raus heisst `leitung aus` und setzt es.
+    /// Seit v0.5.0 hängt es als **Häkchen** im Menü: Haken rein heisst
+    /// `leitung an` und hebt ein Veto auf, Haken raus heisst `leitung aus`
+    /// und setzt es. Das bleibt so — nur der Weg INS Menü hat sich noch
+    /// einmal geändert: Rechtsklick statt Linksklick, siehe
+    /// {@link Kern::brain_oeffnen} und Bug #1124.
     ///
     /// Wissen wir nichts, wird NICHT geschaltet: Ein Klick, der mangels
     /// Antwort das Gegenteil des Gewollten tut, wäre der nächste Ärger.
@@ -126,6 +129,50 @@ impl Kern {
     pub fn protokoll_oeffnen(&self) {
         if let Some(pfad) = self.protokoll() {
             harness::oeffnen(&pfad);
+        }
+    }
+
+    /// Die Adresse der Instanz, mit der dieser Rechner verbunden ist.
+    ///
+    /// `None` heisst: nicht verbunden — oder ein Harness, der das Feld noch
+    /// nicht mitschickt (vor #8932). Beides ist derselbe Fall fuer uns: Wir
+    /// wissen die Adresse nicht und erfinden keine.
+    pub fn instanz_adresse(&self) -> Option<String> {
+        match &self.wissen {
+            Wissen::Da(s) => s.verbindung.clone().flatten().and_then(|v| v.basis),
+            _ => None,
+        }
+    }
+
+    /// Was der Linksklick tut: AI Brain im Browser oeffnen (#1124).
+    ///
+    /// ## Warum der Linksklick das ist und nicht das Menue
+    ///
+    /// Drei Fassungen hat dieser Klick gehabt, und jede hat den naechsten
+    /// Punkt freigelegt:
+    ///
+    /// 1. **Gar nichts** (bis v0.4.1). `Activate` war nicht behandelt, der
+    ///    Klick fiel ins Leere, und von aussen sah das aus wie ein Tray, der
+    ///    sich nicht bedienen laesst.
+    /// 2. **Die Leitung schalten** (v0.4.2). Loeste den toten Klick — und ein
+    ///    Symbolklick, der etwas schaltet, ist in keiner anderen Leiste so.
+    /// 3. **Das Menue oeffnen** (v0.5.0, `ItemIsMenu`). Richtig nach der
+    ///    Spezifikation, und in Bastians Leiste trotzdem falsch: Omarchys
+    ///    quickshell-Leiste oeffnet das Menue bei jedem Linksklick NEU, statt
+    ///    umzuschalten — es liess sich per Linksklick nicht mehr schliessen
+    ///    (Bug #1124). Siehe die Messung in `linux.rs`.
+    ///
+    /// Jetzt ist es, was Bastian entschieden hat und was die anderen Symbole
+    /// in derselben Leiste tun: **Rechtsklick oeffnet das Menue, Linksklick
+    /// oeffnet die Anwendung.** Unsere Anwendung ist AI Brain, und die liegt
+    /// im Browser.
+    ///
+    /// Ohne bekannte Adresse passiert nichts — eine erfundene URL waere
+    /// schlimmer als ein Klick, der nichts tut. Der Menuepunkt „AI Brain
+    /// oeffnen" ist dann ebenfalls ausgegraut und sagt damit, woran es liegt.
+    pub fn brain_oeffnen(&self) {
+        if let Some(adresse) = self.instanz_adresse() {
+            harness::oeffnen(&adresse);
         }
     }
 
@@ -173,6 +220,57 @@ mod tests {
         let mut k = Kern::neu(tx);
         k.wissen = wissen;
         (k, rx)
+    }
+
+    /// #1124: Woher der Linksklick seine Adresse nimmt — und wann nicht.
+    ///
+    /// Die drei Schichten aus #8914 gelten hier genauso: „weiss ich nicht"
+    /// ist nicht „nicht verbunden", und beides ist nicht „Adresse da". Ein
+    /// Klick, der aus Unwissen irgendeine URL oeffnet, waere schlimmer als
+    /// einer, der nichts tut.
+    #[test]
+    fn die_adresse_fuer_den_linksklick_wird_nicht_erfunden() {
+        use crate::ansicht::Verbindung;
+
+        // Harness zu alt: Feld fehlt ganz.
+        let (k, _rx) = kern(Wissen::Da(Status::default()));
+        assert_eq!(k.instanz_adresse(), None);
+
+        // Harness kennt das Feld und sagt: kein Zugang hinterlegt.
+        let (k, _rx) = kern(Wissen::Da(Status {
+            verbindung: Some(None),
+            ..Status::default()
+        }));
+        assert_eq!(k.instanz_adresse(), None);
+
+        // Verbunden, aber ohne `basis` (Harness vor #8932).
+        let (k, _rx) = kern(Wissen::Da(Status {
+            verbindung: Some(Some(Verbindung {
+                instanz: "AI Brain".into(),
+                geraet: "laptop".into(),
+                basis: None,
+            })),
+            ..Status::default()
+        }));
+        assert_eq!(k.instanz_adresse(), None);
+
+        // Und der Normalfall.
+        let (k, _rx) = kern(Wissen::Da(Status {
+            verbindung: Some(Some(Verbindung {
+                instanz: "AI Brain".into(),
+                geraet: "laptop".into(),
+                basis: Some("https://brain.example.com".into()),
+            })),
+            ..Status::default()
+        }));
+        assert_eq!(
+            k.instanz_adresse().as_deref(),
+            Some("https://brain.example.com")
+        );
+
+        // Ohne Antwort gar nichts — der Klick bleibt still.
+        let (k, _rx) = kern(Wissen::Unbekannt);
+        assert_eq!(k.instanz_adresse(), None);
     }
 
     #[test]

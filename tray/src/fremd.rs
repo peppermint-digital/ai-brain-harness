@@ -33,7 +33,7 @@ use std::sync::mpsc;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::ansicht::Ansicht;
 use crate::harness;
@@ -62,6 +62,8 @@ enum Aktion {
     /// Das Häkchen: an, wenn aus — aus, wenn an.
     Umschalten,
     Aus,
+    /// AI Brain im Browser öffnen — dasselbe wie der Linksklick (#1124).
+    Brain,
     Protokoll,
     Beenden,
 }
@@ -70,6 +72,8 @@ enum Aktion {
 enum Nachricht {
     /// Zeit, den Zustand neu zu lesen.
     Takt,
+    /// Linksklick auf das Symbol (#1124).
+    Klick,
     Menue(MenuId),
     Ende,
 }
@@ -82,6 +86,7 @@ fn menue(
     protokoll: bool,
     weiss_etwas: bool,
     aufraeumen: bool,
+    brain: bool,
 ) -> (Menu, HashMap<MenuId, Aktion>) {
     let menu = Menu::new();
     let mut zuordnung = HashMap::new();
@@ -130,6 +135,11 @@ fn menue(
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // Derselbe Weg wie der Linksklick, nur sichtbar — siehe `linux.rs`.
+    let brain_punkt = MenuItem::new("AI Brain öffnen", brain, None);
+    zuordnung.insert(brain_punkt.id().clone(), Aktion::Brain);
+    let _ = menu.append(&brain_punkt);
 
     let log = MenuItem::new("Protokoll öffnen", protokoll, None);
     zuordnung.insert(log.id().clone(), Aktion::Protokoll);
@@ -210,11 +220,25 @@ pub fn starten() -> Result<(), String> {
         let _ = bote_menue.send_event(Nachricht::Menue(e.id));
     }));
 
-    // KEINE eigene Klickbehandlung mehr: Das Menü öffnet die Leiste selbst
-    // (`with_menu_on_left_click`), und sie schliesst es deshalb beim zweiten
-    // Klick auch selbst. Wer `Activate` selbst behandelt, macht das Menü zu
-    // einer Sache der Anwendung — und dann fehlt ihr der Weg, es wieder
-    // zuzumachen.
+    // Linksklick öffnet AI Brain im Browser — das Gegenstück zu `activate`
+    // unter Linux (#1124). Die Begründung steht in `linux.rs` und an
+    // `Kern::brain_oeffnen`; hier zählt, dass es auf allen drei Plattformen
+    // dasselbe ist. Ein Tray, der sich je Leiste anders bedienen lässt, ist
+    // drei Trays.
+    let bote_klick = bote.clone();
+
+    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
+        // Nur der Linksklick, und nur beim Loslassen: Sonst löst ein
+        // einziger Klick zweimal aus (Down und Up).
+        if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } = e
+        {
+            let _ = bote_klick.send_event(Nachricht::Klick);
+        }
+    }));
 
     let (signal, geweckt) = mpsc::channel();
     let bote_signal = bote.clone();
@@ -254,18 +278,18 @@ pub fn starten() -> Result<(), String> {
                     false,
                     kern.weiss_etwas(),
                     kern.aufraeumen_noetig(),
+                    kern.instanz_adresse().is_some(),
                 );
                 zuordnung = neu;
 
                 match TrayIconBuilder::new()
                     .with_tooltip(a.kurz())
                     .with_menu(Box::new(menu))
-                    // Linksklick öffnet das Menü — das Gegenstück zu
-                    // `ItemIsMenu` unter Linux (siehe `linux.rs`). Ein Tray,
-                    // der sich je Plattform anders bedienen lässt, ist zwei
-                    // Trays; und ein Symbolklick, der etwas SCHALTET, ist in
-                    // keiner Leiste so.
-                    .with_menu_on_left_click(true)
+                    // Das Menü gehört dem Rechtsklick, der Linksklick öffnet
+                    // AI Brain (#1124) — wie bei den anderen Symbolen in
+                    // Bastians Leiste. `false` ist hier also keine fehlende
+                    // Bequemlichkeit, sondern die Entscheidung.
+                    .with_menu_on_left_click(false)
                     .build()
                 {
                     Ok(t) => {
@@ -290,10 +314,13 @@ pub fn starten() -> Result<(), String> {
                 *lauf = ControlFlow::ExitWithCode(0);
             }
 
+            Event::UserEvent(Nachricht::Klick) => kern.brain_oeffnen(),
+
             Event::UserEvent(Nachricht::Menue(id)) => match zuordnung.get(&id) {
                 Some(Aktion::An(dauer)) => kern.einschalten(dauer),
                 Some(Aktion::Umschalten) => kern.umschalten(),
                 Some(Aktion::Aus) => kern.ausschalten(),
+                Some(Aktion::Brain) => kern.brain_oeffnen(),
                 Some(Aktion::Protokoll) => kern.protokoll_oeffnen(),
                 Some(Aktion::Beenden) => kern.beenden(),
                 None => {}
@@ -324,6 +351,7 @@ pub fn starten() -> Result<(), String> {
                         kern.protokoll().is_some(),
                         kern.weiss_etwas(),
                         kern.aufraeumen_noetig(),
+                        kern.instanz_adresse().is_some(),
                     );
 
                     zuordnung = neu;
