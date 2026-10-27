@@ -37,6 +37,7 @@ mod freigabe;
 mod imkr;
 mod frage;
 mod konto;
+mod einrichten;
 mod leitung;
 mod maske;
 mod mcp;
@@ -61,6 +62,8 @@ const USAGE: &str = "\
 AI Brain Harness
 
 Aufrufe:
+  ai-brain-harness einrichten [...]   Alles in einem Befehl: verbinden, abgleichen,
+                                  MCP eintragen, Leitung und Leiste anbieten
   ai-brain-harness connect [domain]   Rechner mit einer AI-Brain-Instanz verbinden
                                   (ohne Angabe: die Instanz, von der dieses
                                   Programm kam)
@@ -163,6 +166,9 @@ Optionen für `select`:
 Optionen für `connect`:
   --name <Gerätename>   Abweichender Gerätename (Standard: Hostname)
   --no-claude-config    Claude-Code-Konfiguration nicht anfassen
+  --kein-browser        Die Bestätigungsseite nicht öffnen. Der Code und die
+                        Adresse stehen ohnehin im Terminal — über ssh ohne
+                        Anzeige wird sie von sich aus nicht geöffnet.
   --neu                 Auch dann koppeln, wenn dieser Rechner schon verbunden ist.
                         Legt einen ZWEITEN Gerätezugang an — für ein Update ist das
                         nicht nötig, da genügt das Ersetzen des Programms.
@@ -230,6 +236,7 @@ fn main() -> ExitCode {
 
     let result = match args.first().map(String::as_str) {
         Some("connect") => pairing::connect(&args[1..]),
+        Some("einrichten") => einrichten::verwalten(&args[1..]),
         Some("mcp") => mcp::serve(),
         Some("rechner-mcp") => rechner::serve(),
         Some("sync") => sync::run(&args[1..]),

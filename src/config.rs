@@ -370,6 +370,38 @@ pub fn write_claude_config() -> Result<PathBuf, String> {
     write_claude_config_mit_bericht().map(|(pfad, _)| pfad)
 }
 
+/// Steht unser MCP-Eintrag wirklich in Claude Codes Konfiguration? (#8949)
+///
+/// **Gelesen, nicht erinnert.** Der Einrichtungsassistent berichtet am Ende,
+/// was eingetragen ist — und eine Zeile, die nur den eigenen Vorsatz
+/// wiedergibt („wir haben geschrieben"), ist genau die Sorte Anzeige, die
+/// technisch richtig ist und nichts beantwortet.
+///
+/// Geprüft wird auch, dass der Befehl auf UNSER Programm zeigt: Ein Eintrag,
+/// der auf eine frühere Fassung an einem Pfad zeigt, der nicht mehr existiert,
+/// sieht in der Datei richtig aus und ist tot. Genau das lag am 15.10.2026 auf
+/// Laptop und Desktop ({@link EIGENE_NAMEN}).
+pub fn claude_hat_eintrag() -> bool {
+    let Ok(pfad) = claude_config_path() else {
+        return false;
+    };
+
+    let Ok(roh) = fs::read_to_string(&pfad) else {
+        return false;
+    };
+
+    let Ok(wert) = serde_json::from_str::<serde_json::Value>(&roh) else {
+        return false;
+    };
+
+    wert
+        .get("mcpServers")
+        .and_then(|s| s.get("ai-brain"))
+        .and_then(|e| e.get("command"))
+        .and_then(|c| c.as_str())
+        .is_some_and(ist_unser_programm)
+}
+
 // ----------------------------------------------------------------- codex ----
 
 /// Traegt den MCP-Server in Codex ein — ueber dessen eigenes Werkzeug.

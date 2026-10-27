@@ -931,7 +931,7 @@ const DIENST_AUTOSTART: ai_brain_plattform::Eintrag = ai_brain_plattform::Eintra
     args: &["leitung", "dienst"],
 };
 
-fn autostart_ein() -> Result<(), String> {
+pub fn autostart_ein() -> Result<(), String> {
     ai_brain_plattform::autostart::ein(&DIENST_AUTOSTART)?;
 
     println!("Der Dienst startet ab dem nächsten Anmelden. Jetzt sofort starten:");
@@ -946,6 +946,21 @@ fn autostart_ein() -> Result<(), String> {
 
 fn autostart_aus() -> Result<(), String> {
     ai_brain_plattform::autostart::aus(&DIENST_AUTOSTART)
+}
+
+/// Ein Wort über den Schalter, für den Einrichtungsassistenten (#8949).
+///
+/// Nicht `status`, denn das schreibt vier Zeilen und fragt die Verbindung ab.
+/// Hier geht es um die eine Zeile in einer Zusammenfassung — und sie soll den
+/// Grund nennen, nicht nur an/aus: „aus" liest sich wie „kommt gleich wieder",
+/// und bei einem Veto kommt sie nicht wieder.
+pub fn stand_wort() -> String {
+    match stand_jetzt() {
+        Stand::VonHand(bis) => format!("an von Hand, bis {} UTC", uhrzeit(bis)),
+        Stand::Automatisch => "an (automatisch, ein Channel hat diesen Rechner freigegeben)".into(),
+        Stand::Veto => "aus — abgeschaltet, bis du sie einschaltest".into(),
+        Stand::Aus => "aus (kein Channel hat diesen Rechner freigegeben)".into(),
+    }
 }
 
 /// Die PID-Datei belegen — eine Leitung je Gerät.

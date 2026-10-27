@@ -58,6 +58,7 @@ pub fn connect(args: &[String]) -> Result<(), String> {
     let mut device_name: Option<String> = None;
     let mut configure_claude = true;
     let mut noch_einer = false;
+    let mut browser = true;
 
     let mut i = 0;
     while i < args.len() {
@@ -72,6 +73,7 @@ pub fn connect(args: &[String]) -> Result<(), String> {
             }
             "--neu" => noch_einer = true,
             "--no-claude-config" => configure_claude = false,
+            "--kein-browser" => browser = false,
             other if other.starts_with("--") => {
                 return Err(format!("Unbekannte Option: {other}"));
             }
@@ -148,17 +150,37 @@ pub fn connect(args: &[String]) -> Result<(), String> {
 
     let device = request_device_code(&instance.oauth.device_authorization_endpoint, &client_id, &instance.mcp.scope)?;
 
+    let adresse = device
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&device.verification_uri);
+
+    // ## Code ZUERST, Browser danach (#8949)
+    //
+    // Die Reihenfolge ist nicht Geschmack. Ein Browser, der aufgeht, nimmt
+    // den Fokus — wer dann den Code sucht, muss das Terminal zurückholen.
+    // Steht er vorher da, hat man ihn gelesen, bevor das Fenster kommt.
+    //
+    // Und er steht **immer** da, auch wenn der Browser aufgeht: `xdg-open`
+    // liefert auf manchen Systemen 0 und tut nichts. Auf diesen Rückgabewert
+    // zu bauen hiesse, jemanden auf ein Fenster warten zu lassen, das nicht
+    // kommt — während die Angabe, die er braucht, ungelesen vor ihm steht.
     println!();
     println!("  Dein Code:  {}", device.user_code);
     println!();
     println!("  Bestätige ihn unter:");
-    println!(
-        "  {}",
-        device
-            .verification_uri_complete
-            .as_deref()
-            .unwrap_or(&device.verification_uri)
-    );
+    println!("  {adresse}");
+
+    if browser && browser_sinnvoll() {
+        if ai_brain_plattform::oeffnen::jetzt(adresse) {
+            println!();
+            println!("  (Browser geöffnet — kommt keiner, nimm die Adresse von oben.)");
+        } else {
+            println!();
+            println!("  (Browser liess sich nicht öffnen — nimm die Adresse von oben.)");
+        }
+    }
+
     println!();
     print!("Warte auf die Bestätigung ");
     let _ = std::io::stdout().flush();
@@ -229,6 +251,22 @@ pub fn connect(args: &[String]) -> Result<(), String> {
     println!("  {}", instance.companion.devices_url);
 
     Ok(())
+}
+
+/// Lohnt es, hier einen Browser zu öffnen?
+///
+/// Unter macOS und Windows gibt es immer eine Oberfläche. Unter Linux nicht:
+/// Auf einem Server über ssh würde `xdg-open` entweder scheitern oder — was
+/// schlimmer ist — einen Textbrowser in dieselbe Sitzung starten und die
+/// Ausgabe übernehmen, in der gerade der Code steht.
+///
+/// Gefragt wird deshalb nach einer Anzeige, nicht nach dem Betriebssystem.
+fn browser_sinnvoll() -> bool {
+    if cfg!(target_os = "macos") || cfg!(windows) {
+        return true;
+    }
+
+    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 fn request_device_code(endpoint: &str, client_id: &str, scope: &str) -> Result<DeviceCodeResponse, String> {
