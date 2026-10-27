@@ -1,6 +1,6 @@
 [package]
 name = "ai-brain-harness"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Verbindet einen Rechner mit einer AI-Brain-Instanz, stellt deren MCP-Server bereit und startet lokale Agentenlaeufe"
 license = "MIT"
