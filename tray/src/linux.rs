@@ -3,27 +3,61 @@
 //! Reines Rust, ohne GTK. Läuft in quickshell (Omarchy), waybar, KDE und
 //! GNOME mit AppIndicator-Erweiterung.
 //!
-//! Hier steht nur das Anbinden an die Leiste. Was angezeigt wird, steht in
-//! `ansicht`, was passiert, in `kern` — beide ohne D-Bus, damit macOS und
-//! Windows dieselbe Bedienung bekommen und nicht eine zweite, ähnliche.
+//! Hier steht nur das Anbinden an die Leiste. Was im Menü steht, steht in
+//! `menue`, was angezeigt wird in `ansicht`, was passiert in `kern` — alle
+//! drei ohne D-Bus, damit macOS und Windows dieselbe Bedienung bekommen und
+//! nicht eine zweite, ähnliche.
+//!
+//! ## Zwei Betriebsarten, und welche gilt, entscheidet der Rechner
+//!
+//! | | Linksklick | Rechtsklick | Wo |
+//! |---|---|---|---|
+//! | **Eigenes Menü** | unser Fenster, Klick schaltet um | Menü der Leiste | Wayland mit wlr-layer-shell (Hyprland, sway, river …) |
+//! | **Menü der Leiste** | Menü der Leiste | Menü der Leiste | alles andere (GNOME, KDE, X11) |
+//!
+//! Die Unterscheidung liegt in `MENU_ON_ACTIVATE`, und das ist eine
+//! **Konstante** in `ksni::Tray` — also nicht zur Laufzeit umschaltbar.
+//! Deshalb ist `Tray` über `EIGEN` generisch: Es gibt zwei Ausprägungen
+//! derselben Struktur, und `starten` wählt eine. Der Umweg ist billiger als
+//! sein Gegenteil (zwei Strukturen mit demselben Inhalt), und er hält den
+//! Unterschied an genau einer Zeile.
+//!
+//! Die Entscheidung fällt beim Start, nicht je Klick: Eine Oberfläche
+//! wechselt ihre Fähigkeiten nicht, während ein Tray läuft.
 
 use std::sync::mpsc;
 
 use ksni::blocking::TrayMethods;
 
-use crate::kern::{Kern, Signal, DAUERN, TAKT};
+use crate::kern::{Kern, Signal, TAKT};
+use crate::menue::{self, Eintrag};
+use crate::popup;
 use crate::symbol;
 
 /// Die Kantenlänge der Pixmap. 22 Pixel ist das Mass, in dem Leisten
 /// Tray-Symbole erwarten; grössere werden heruntergerechnet und matschig.
 const KANTE: u32 = 22;
 
-struct Tray {
+/// Womit sich die Betriebsart von Hand festlegen lässt.
+///
+/// `eigen` erzwingt das eigene Fenster, `leiste` das Menü der Leiste. Alles
+/// andere (und nichts) heisst: nachsehen.
+///
+/// Dass es diesen Schalter gibt, ist keine Unentschlossenheit, sondern der
+/// Rückweg. Die fünf Fassungen des Symbolklicks seit v0.4.1 haben eins
+/// gezeigt: Wenn etwas an diesem Klick klemmt, sitzt jemand an einem
+/// Arbeitsrechner und braucht die andere Fassung **jetzt**, nicht nach einem
+/// Release.
+const SCHALTER: &str = "AI_BRAIN_TRAY_MENUE";
+
+struct Tray<const EIGEN: bool> {
     kern: Kern,
+    /// Das eigene Menüfenster — bei `EIGEN = false` immer leer.
+    fenster: popup::Fenster,
 }
 
-impl ksni::Tray for Tray {
-    /// **Ein Klick öffnet das Menü — links wie rechts.**
+impl<const EIGEN: bool> ksni::Tray for Tray<EIGEN> {
+    /// **Wer das Menü öffnet: wir oder die Leiste.**
     ///
     /// `true` heisst: Die Leiste behandelt das Item als Menü (`ItemIsMenu`),
     /// öffnet es beim Linksklick selbst und ruft kein `Activate`. `ksni`
@@ -31,58 +65,91 @@ impl ksni::Tray for Tray {
     /// `UnknownMethod("ItemIsMenu")`, woran GNOME und KDE &lt; 6.4 den
     /// Menüweg erkennen.
     ///
-    /// ## Das ist die vierte Fassung dieses Klicks, und sie ist eine Ansage
+    /// `false` heisst: Der Linksklick kommt als `Activate` bei uns an — und
+    /// genau das brauchen wir, um das Menü **selbst** zu zeigen.
     ///
-    /// Bastian am 28.10.2026, wörtlich: *„Der Harness macht jetzt auf Klick
-    /// AI-Brain auf, aber der sollte doch einfach nur das Tray-Menü
-    /// aufmachen. Mit Linksklick."*
+    /// ## Das ist die fünfte Fassung dieses Klicks, und sie löst endlich die
+    /// ganze Bitte
     ///
-    /// Damit ist v0.5.1 zurückgenommen. Dort stand hier `false`, und der
-    /// Linksklick öffnete AI Brain im Browser — auf Grundlage seiner Antwort
-    /// „wie die anderen" auf eine Rückfrage zu Bug #1124. Gemeint war etwas
-    /// anderes, als wir daraus gelesen haben. Die Entscheidung steht also
-    /// nicht mehr auf einer Auslegung, sondern auf einem Satz.
+    /// Bastian am 28.10.2026, wörtlich: *„Wenn ich links klicke ausserhalb
+    /// des Tray-Menüs drücke, muss es zugehen und wenn ich nochmal auf das
+    /// Tray-Symbol klicke mit links klicken, muss es halt auch zugehen, wie
+    /// ein Toggle auf Tray-Menü zu Tray-Menü."* Davor, zum selben Punkt:
+    /// *„Ja, das Tray geht mit Linksklick auf, aber wenn ich nochmal
+    /// Linksklick mache, geht es nicht wieder zu."*
     ///
-    /// Was das Menü *kann*, ändert sich nicht: Das Häkchen „Live-Leitung"
-    /// schaltet die Leitung, und „AI Brain öffnen" ist weiter drin — der Weg
-    /// aus v0.5.1 bleibt, er hängt nur nicht mehr am Klick auf das Symbol.
+    /// Drei Fälle also, und alle drei müssen gehen:
     ///
-    /// ## Die Kehrseite ist bekannt, gemessen und bleibt
+    /// 1. Linksklick aufs Symbol **öffnet**.
+    /// 2. Erneuter Linksklick aufs Symbol **schliesst**.
+    /// 3. Linksklick irgendwo daneben **schliesst** — auch auf der Leiste.
     ///
-    /// In Omarchys Leiste (quickshell, Paket 4.0.4-1) schliesst ein **zweiter
-    /// Linksklick das Menü nicht**; nur ein Klick ausserhalb der Leiste macht
-    /// es zu. Nachgelesen am 28.10.2026 im Quelltext
-    /// `/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`
-    /// (unverändert gegenüber dem 27.10.):
+    /// ## Warum die Leiste das nicht kann — und wir schon
     ///
-    /// - `MouseArea.onClicked` ruft bei `modelData.onlyMenu` (= `ItemIsMenu`)
-    ///   `displayMenu()` → `openTrayMenu()`, und das endet **immer** mit
-    ///   `trayMenuOpen = true`. Ein Umschalten gibt es nicht; `close()`
-    ///   existiert, wird aber von dort nicht gerufen.
-    /// - Der Fokus-Griff (`HyprlandFocusGrab` in `Ui/PopupCard.qml`) listet
-    ///   `[popup, Leistenfenster]`. Ein Klick AUF der Leiste klärt ihn
-    ///   deshalb nie.
+    /// Mit `true` liefert die Leiste das Menü. In Omarchy (quickshell, Paket
+    /// 4.0.4-1, nachgelesen am 28.10.2026 in
+    /// `/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`) ruft
+    /// `MouseArea.onClicked` bei `modelData.onlyMenu` `displayMenu()` →
+    /// `openTrayMenu()`, und das endet **immer** mit `trayMenuOpen = true`.
+    /// Ein Umschalten gibt es dort nicht; `close()` existiert, wird aber vom
+    /// Klickpfad nie gerufen. Der Fokus-Griff in `Ui/PopupCard.qml` listet
+    /// `[popup, Leistenfenster]` — ein Klick AUF der Leiste klärt ihn also
+    /// auch nicht. Fall 2 und Fall 3 fallen beide aus.
     ///
-    /// **Auf unserer Seite ist das nicht umgehbar**, und das ist keine
-    /// Bequemlichkeit: StatusNotifierItem kennt keinen Weg, dem Host „schliess
-    /// mein Menü" zu sagen — das Menü ist sein Fenster, wir liefern nur den
-    /// Inhalt über DBusMenu. Mit `ItemIsMenu = true` erfahren wir vom Klick
-    /// nicht einmal (`Activate` kommt nicht mehr an), und selbst wenn:
-    /// Abmelden und neu anmelden, um ein Popup wegzubekommen, würde das
-    /// Symbol flackern lassen und den Fehler gegen einen schlimmeren
-    /// tauschen. Gemeldet wird der Punkt bei Omarchy (#8958); gepatcht wird
-    /// dort nichts, ein Patch an einer Paketdatei ist beim nächsten Update
-    /// weg.
+    /// Und wir können der Leiste nicht helfen: **StatusNotifierItem kennt
+    /// keinen Weg, dem Host „schliess mein Menü" zu sagen.** Das Menü ist
+    /// sein Fenster, wir liefern nur den Inhalt über DBusMenu. In keiner
+    /// Fassung der Spezifikation gibt es ein Signal dafür.
     ///
-    /// Bastian kennt die Kehrseite und will den Linksklick trotzdem. Siehe
-    /// Bug #1124.
-    const MENU_ON_ACTIVATE: bool = true;
+    /// Geprüft wurden am 28.10.2026 ausserdem:
+    ///
+    /// | Weg | Warum nicht |
+    /// |---|---|
+    /// | Eine Option in Omarchy/quickshell | Es gibt keine. `~/.config/omarchy/shell.json` kennt zum Tray nur Layout, `pinned` und `hidden` — kein Umschalten. |
+    /// | Die drei Zeilen in `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet (#8958), nicht hierher kopiert. |
+    /// | Item abmelden und neu anmelden | Symbol flackert, Leiste sieht einen Verbindungsabbruch. Tauscht den Fehler gegen einen schlimmeren. |
+    ///
+    /// Also zeichnet der Tray sein Menü selbst (`popup`). Damit liegt das
+    /// Umschalten vollständig bei uns — und zwar ohne Zustand, den zwei
+    /// Programme gleich sehen müssten: Der bildschirmgrosse Auffänger unter
+    /// dem Menü fängt den zweiten Klick, bevor er die Leiste erreicht. Die
+    /// Einzelheiten stehen im Kopf von `popup::flaeche`.
+    ///
+    /// Was das Menü *kann*, ändert sich nicht: dieselben Punkte, aus
+    /// derselben Liste (`menue::bauen`) — der Rechtsklick zeigt sie weiter
+    /// über die Leiste.
+    const MENU_ON_ACTIVATE: bool = !EIGEN;
 
-    // Kein `activate` mehr: Mit `MENU_ON_ACTIVATE = true` ruft `ksni` es
-    // nicht, sondern beantwortet `Activate` mit `UnknownMethod`. Eine
-    // Behandlung hier wäre toter Code, der aussieht wie eine Zusage — und
-    // „Linksklick öffnet AI Brain" stand genau so bis v0.5.2 hier. Den Weg
-    // selbst gibt es weiter, sichtbar als Menüpunkt „AI Brain öffnen".
+    /// Der Linksklick, wenn wir das Menü selbst zeigen.
+    ///
+    /// Kommt nur an, solange **kein** Menü offen ist: Steht eins, liegt unser
+    /// Auffänger über der Leiste und nimmt den Klick. Das `offen()` hier ist
+    /// deshalb kein Umschalter für den Normalfall, sondern der Riegel für den
+    /// Sonderfall — eine Leiste, die `Activate` doppelt schickt, oder ein
+    /// Fenster, das noch aufräumt.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        if !EIGEN {
+            // Mit `MENU_ON_ACTIVATE = true` ruft `ksni` das hier nicht
+            // einmal. Der Zweig steht da, damit niemand aus dem Vorhandensein
+            // der Methode schliesst, dass der Klick etwas tut.
+            return;
+        }
+
+        if self.fenster.offen() {
+            self.fenster.schliessen();
+            return;
+        }
+
+        let eintraege = menue::bauen(&self.kern);
+
+        if let Err(grund) = self.fenster.oeffnen(&eintraege, self.kern.signalweg()) {
+            // Kein stilles Scheitern: Ein Klick, der nichts tut, ist genau
+            // die Beschwerde, mit der #1124 angefangen hat. Die Zeile steht
+            // im Protokoll des Trays, und der Fehler im Menü selbst.
+            eprintln!("Menüfenster ging nicht auf: {grund}");
+            crate::kern::fehler_melden(grund);
+        }
+    }
 
     fn id(&self) -> String {
         "ai-brain-tray".into()
@@ -133,141 +200,83 @@ impl ksni::Tray for Tray {
         }
     }
 
+    /// Das Menü der Leiste — dieselben Punkte wie unser Fenster.
+    ///
+    /// Gebaut aus `menue::bauen`, nicht hier zusammengestellt: Auf einem
+    /// Hyprland-Rechner gibt es jetzt **zwei** Menüs für dieselbe Sache
+    /// (unser Fenster am Linksklick, dieses am Rechtsklick). Zwei Listen
+    /// wären zwei Gelegenheiten, verschieden zu sein — und bis v0.5.3 war das
+    /// schon zwischen Linux und macOS so.
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
 
-        let a = self.kern.ansicht();
-        let an = self.kern.an();
-
-        let mut eintraege: Vec<ksni::MenuItem<Self>> = Vec::new();
-
-        // Zwei Zeilen, nicht eine: Verbindung und Leitung sind zwei Zustände.
-        // Die dritte kommt dazu, wenn es etwas zu sagen gibt.
-        for text in [Some(a.verbindung), Some(a.leitung), a.lage]
+        menue::bauen(&self.kern)
             .into_iter()
-            .flatten()
-        {
-            eintraege.push(
-                StandardItem {
+            .map(|e| match e {
+                Eintrag::Trenner => MenuItem::Separator,
+
+                Eintrag::Zeile(text) => StandardItem {
                     label: text,
                     enabled: false,
                     ..Default::default()
                 }
                 .into(),
-            );
-        }
 
-        if let Some(fehler) = &self.kern.letzter_fehler {
-            eintraege.push(
-                StandardItem {
-                    label: format!("Fehler: {fehler}"),
-                    enabled: false,
+                Eintrag::Haken {
+                    text,
+                    gesetzt,
+                    aktiv,
+                    aktion,
+                } => CheckmarkItem {
+                    label: text,
+                    checked: gesetzt,
+                    enabled: aktiv,
+                    activate: Box::new(move |t: &mut Self| t.kern.tun(&aktion)),
                     ..Default::default()
                 }
                 .into(),
-            );
-        }
 
-        eintraege.push(MenuItem::Separator);
+                Eintrag::Punkt {
+                    text,
+                    aktiv,
+                    aktion,
+                } => {
+                    // Kein `process::exit` im Rückruf: Der läuft im
+                    // D-Bus-Faden, und ein Prozess, der mitten in einer
+                    // Antwort endet, lässt die Leiste auf eine Antwort
+                    // warten, die nicht mehr kommt. `Aktion::Beenden` geht
+                    // deshalb über ein Signal an den Haupt-Faden — siehe
+                    // `Kern::beenden`.
+                    let symbol_name = if matches!(aktion, crate::menue::Aktion::Beenden) {
+                        "application-exit"
+                    } else {
+                        ""
+                    };
 
-        // ## Ein Häkchen, kein Knopf (Stand 27.10.2026)
-        //
-        // Ein Knopf „Live einschalten" sagt nicht, ob sie gerade an ist — man
-        // muss die Zeilen oben lesen, um es zu wissen. Ein Häkchen trägt den
-        // Zustand und die Handlung in einem, und es ist das, was ein Menü in
-        // jedem anderen Programm dafür anbietet.
-        //
-        // Dahinter liegt dieselbe Logik wie vorher am Linksklick: Haken rein
-        // heisst `leitung an` (hebt ein Veto auf), Haken raus heisst
-        // `leitung aus` (setzt es). Siehe `Kern::umschalten`.
-        eintraege.push(
-            CheckmarkItem {
-                label: "Live-Leitung".into(),
-                checked: an,
-                // Ohne Antwort nicht schalten: Ein Klick, der mangels Wissen
-                // das Gegenteil des Gewollten tut, wäre der nächste Ärger.
-                enabled: self.kern.weiss_etwas(),
-                activate: Box::new(|t: &mut Self| t.kern.umschalten()),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        for (beschriftung, dauer) in DAUERN {
-            eintraege.push(
-                StandardItem {
-                    label: format!("… ab jetzt {beschriftung}"),
-                    activate: Box::new(move |t: &mut Self| t.kern.einschalten(dauer)),
-                    ..Default::default()
+                    StandardItem {
+                        label: text,
+                        enabled: aktiv,
+                        icon_name: symbol_name.to_string(),
+                        activate: Box::new(move |t: &mut Self| t.kern.tun(&aktion)),
+                        ..Default::default()
+                    }
+                    .into()
                 }
-                .into(),
-            );
-        }
+            })
+            .collect()
+    }
+}
 
-        // ## „Aufräumen" erscheint nur, wenn es etwas aufzuräumen gibt
-        //
-        // Bis zum 27.10.2026 stand hier ein dauerhaftes „Live ausschalten"
-        // mit `enabled: an`. Das war im Störfall falsch — Schalter aus,
-        // Prozess läuft weiter, und genau der Punkt, der aufräumt, war
-        // ausgegraut. Dann stand es dauerhaft da und war `enabled`.
-        //
-        // Jetzt trägt das Häkchen den Normalfall, und dieser Punkt bleibt für
-        // den Fall, den das Häkchen NICHT abdeckt: Steht der Schalter auf
-        // aus, während ein Prozess weiterläuft, ist das Häkchen leer — ein
-        // Klick darauf würde einschalten, nicht aufräumen. Deshalb hier ein
-        // eigener Weg, und zwar sichtbar nur dann.
-        if self.kern.aufraeumen_noetig() {
-            eintraege.push(
-                StandardItem {
-                    label: "Leitung aufräumen (Prozess läuft ohne Schalter)".into(),
-                    activate: Box::new(|t: &mut Self| t.kern.ausschalten()),
-                    ..Default::default()
-                }
-                .into(),
-            );
-        }
-
-        eintraege.push(MenuItem::Separator);
-
-        // Der Weg zu AI Brain — seit v0.5.3 nur noch hier, nicht mehr am
-        // Linksklick (der öffnet das Menü). Ohne bekannte Adresse ist der
-        // Punkt ausgegraut und sagt damit, woran es liegt; eine erfundene
-        // URL wäre schlimmer als ein Klick, der nichts tut.
-        eintraege.push(
-            StandardItem {
-                label: "AI Brain öffnen".into(),
-                enabled: self.kern.instanz_adresse().is_some(),
-                activate: Box::new(|t: &mut Self| t.kern.brain_oeffnen()),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        eintraege.push(
-            StandardItem {
-                label: "Protokoll öffnen".into(),
-                enabled: self.kern.protokoll().is_some(),
-                activate: Box::new(|t: &mut Self| t.kern.protokoll_oeffnen()),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        // Kein `process::exit` im Rückruf: Der läuft im D-Bus-Faden, und ein
-        // Prozess, der mitten in einer Antwort endet, lässt die Leiste auf
-        // eine Antwort warten, die nicht mehr kommt. Stattdessen ein Signal
-        // an den Haupt-Faden, der das Item abmeldet und dann geht.
-        eintraege.push(
-            StandardItem {
-                label: "Tray beenden".into(),
-                icon_name: "application-exit".into(),
-                activate: Box::new(|t: &mut Self| t.kern.beenden()),
-                ..Default::default()
-            }
-            .into(),
-        );
-
-        eintraege
+/// Zeigt der Tray sein Menü auf diesem Rechner selbst?
+///
+/// Die Reihenfolge ist Absicht: erst der Schalter von Hand, dann die Messung.
+/// Wer `AI_BRAIN_TRAY_MENUE=leiste` setzt, soll das Menü der Leiste bekommen,
+/// auch wenn layer-shell da ist.
+fn eigenes_menue() -> bool {
+    match std::env::var(SCHALTER).unwrap_or_default().trim() {
+        "eigen" => true,
+        "leiste" => false,
+        _ => popup::moeglich(),
     }
 }
 
@@ -279,8 +288,11 @@ impl ksni::Tray for Tray {
 pub fn pruefen() -> Result<(), String> {
     let (tx, _rx) = mpsc::channel();
 
-    let handle = Tray {
+    // Die Betriebsart ist für diese Frage gleichgültig — es geht um den
+    // Watcher, nicht um den Klick.
+    let handle = Tray::<false> {
         kern: Kern::neu(tx),
+        fenster: popup::Fenster::keins(),
     }
     .spawn()
     .map_err(|e| format!("Keine Leiste mit StatusNotifier: {e}"))?;
@@ -291,10 +303,19 @@ pub fn pruefen() -> Result<(), String> {
 }
 
 pub fn starten() -> Result<(), String> {
+    if eigenes_menue() {
+        laufen::<true>()
+    } else {
+        laufen::<false>()
+    }
+}
+
+fn laufen<const EIGEN: bool>() -> Result<(), String> {
     let (signal, geweckt) = mpsc::channel();
 
-    let handle = Tray {
+    let handle = Tray::<EIGEN> {
         kern: Kern::neu(signal),
+        fenster: popup::Fenster::keins(),
     }
     .spawn()
     .map_err(|e| {
@@ -305,7 +326,7 @@ pub fn starten() -> Result<(), String> {
         let wissen = crate::harness::abfragen();
         let fehler = crate::kern::fehler_abholen();
 
-        handle.update(|t: &mut Tray| {
+        handle.update(|t: &mut Tray<EIGEN>| {
             t.kern.wissen = wissen;
             if fehler.is_some() {
                 t.kern.letzter_fehler = fehler;
@@ -318,6 +339,13 @@ pub fn starten() -> Result<(), String> {
 
         // Nach einer Aktion sofort, sonst im Takt.
         match geweckt.recv_timeout(TAKT) {
+            Ok(Signal::Gewaehlt(aktion)) => {
+                // Der Punkt kam aus unserem Menüfenster. Ausgeführt wird er
+                // hier und nicht dort: `Kern` liegt im Tray, und was ein
+                // Punkt bedeutet, soll es nur einmal geben.
+                handle.update(|t: &mut Tray<EIGEN>| t.kern.tun(&aktion));
+            }
+
             Ok(Signal::Ende) => {
                 // Dem Menue-Aufruf noch seine Antwort lassen.
                 //
@@ -333,6 +361,7 @@ pub fn starten() -> Result<(), String> {
                 handle.shutdown().wait();
                 return Ok(());
             }
+
             _ => continue,
         }
     }
@@ -342,24 +371,80 @@ pub fn starten() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// Die Zusage aus #1124/#9006, in einer Zeile festgenagelt.
+    /// Die Zusage aus #1124/#9006/#9008, in zwei Zeilen festgenagelt.
     ///
-    /// Diese Konstante ist die ganze Entscheidung: `true` heisst, die Leiste
-    /// öffnet das Menü beim Linksklick selbst. Sie hat zwischen v0.5.0,
-    /// v0.5.1 und v0.5.3 dreimal den Wert gewechselt, und jedes Mal war der
-    /// Grund eine Aussage von Bastian — nicht etwas, das man beim Aufräumen
-    /// nebenbei umdreht. Deshalb steht hier eine Probe und kein Kommentar.
+    /// Diese Konstante ist die ganze Entscheidung, und sie hat zwischen
+    /// v0.5.0, v0.5.1, v0.5.3 und v0.5.4 **viermal** den Wert gewechselt —
+    /// jedes Mal auf eine Aussage von Bastian hin, nie beim Aufräumen
+    /// nebenbei. Deshalb steht hier eine Probe und kein Kommentar.
     ///
-    /// Geprüft wird sie in einem `const`-Block, nicht zur Laufzeit: Der Wert
-    /// ist zur Übersetzungszeit bekannt, also soll der Übersetzer schimpfen
-    /// und nicht erst der Testlauf.
+    /// Geprüft wird in einem `const`-Block, nicht zur Laufzeit: Der Wert ist
+    /// zur Übersetzungszeit bekannt, also soll der Übersetzer schimpfen und
+    /// nicht erst der Testlauf.
     #[test]
-    fn der_linksklick_oeffnet_das_menue() {
+    fn der_linksklick_oeffnet_immer_ein_menue() {
         const {
             assert!(
-                <Tray as ksni::Tray>::MENU_ON_ACTIVATE,
-                "ItemIsMenu muss true bleiben — Bastians Wunsch vom 28.10.2026"
+                !<Tray<true> as ksni::Tray>::MENU_ON_ACTIVATE,
+                "Mit eigenem Fenster muss ItemIsMenu false sein, sonst kommt kein Activate an"
             )
         };
+
+        const {
+            assert!(
+                <Tray<false> as ksni::Tray>::MENU_ON_ACTIVATE,
+                "Ohne eigenes Fenster muss die Leiste das Menü öffnen — sonst tut der Klick nichts"
+            )
+        };
+    }
+
+    /// Der Schalter von Hand schlägt die Messung, in beide Richtungen.
+    ///
+    /// Geprüft wird die Entscheidungslogik, nicht die Umgebungsvariable
+    /// selbst: Ein Test, der `set_var` ruft, greift in alle gleichzeitig
+    /// laufenden Tests hinein — und seit Rust 2024 ist `set_var` zu Recht
+    /// `unsafe`.
+    #[test]
+    fn der_schalter_von_hand_schlaegt_die_messung() {
+        fn entscheiden(wert: &str, gemessen: bool) -> bool {
+            match wert.trim() {
+                "eigen" => true,
+                "leiste" => false,
+                _ => gemessen,
+            }
+        }
+
+        assert!(entscheiden("eigen", false));
+        assert!(!entscheiden("leiste", true));
+        assert!(entscheiden(" eigen ", false), "Leerzeichen zählen nicht");
+
+        // Alles andere fragt nach.
+        for wert in ["", "ja", "1", "wayland", "unsinn"] {
+            assert!(entscheiden(wert, true), "{wert}");
+            assert!(!entscheiden(wert, false), "{wert}");
+        }
+    }
+
+    /// Beide Menüs kommen aus derselben Liste.
+    ///
+    /// Die Probe schaut nicht auf ksni (das braucht einen D-Bus), sondern auf
+    /// die Quelle: `menue::bauen` ist die einzige Stelle, an der Punkte
+    /// entstehen. Wer hier eine zweite anlegt, bricht diese Probe nicht —
+    /// aber die Zählung in `menue::tests` hält die Liste selbst fest.
+    #[test]
+    fn das_menue_kommt_aus_der_geteilten_liste() {
+        let (tx, _rx) = mpsc::channel();
+        let kern = Kern::neu(tx);
+
+        let eintraege = menue::bauen(&kern);
+
+        assert!(
+            eintraege.iter().any(|e| e.text() == Some("Live-Leitung")),
+            "{eintraege:?}"
+        );
+        assert!(
+            eintraege.iter().any(|e| e.text() == Some("Tray beenden")),
+            "{eintraege:?}"
+        );
     }
 }

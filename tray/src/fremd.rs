@@ -37,7 +37,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::ansicht::Ansicht;
 use crate::harness;
-use crate::kern::{self, Kern, Signal, DAUERN, TAKT};
+use crate::kern::{self, Kern, Signal, TAKT};
+use crate::menue::{self, Aktion, Eintrag};
 use crate::symbol;
 
 /// Die Kantenlänge des gezeichneten Symbols.
@@ -50,25 +51,6 @@ const KANTE: u32 = 44;
 #[cfg(windows)]
 const KANTE: u32 = 32;
 
-/// Was an einem Menüpunkt hängt.
-///
-/// Unter Linux trägt jeder Eintrag seinen Rückruf selbst; `muda` liefert
-/// stattdessen eine Kennung, und wir halten die Zuordnung. Deshalb wird sie
-/// beim Neubauen des Menüs mit erneuert — eine alte Kennung zeigt sonst auf
-/// einen Punkt, den es nicht mehr gibt.
-#[derive(Clone, Copy)]
-enum Aktion {
-    An(&'static str),
-    /// Das Häkchen: an, wenn aus — aus, wenn an.
-    Umschalten,
-    Aus,
-    /// AI Brain im Browser öffnen. Seit v0.5.3 nur von hier aus: Der
-    /// Linksklick öffnet das Menü (#1124).
-    Brain,
-    Protokoll,
-    Beenden,
-}
-
 /// Was von aussen in die Schleife kommt.
 enum Nachricht {
     /// Zeit, den Zustand neu zu lesen.
@@ -78,75 +60,58 @@ enum Nachricht {
 }
 
 /// Baut das Menü neu und gibt die Zuordnung Kennung → Aktion dazu.
-fn menue(
-    a: &Ansicht,
-    an: bool,
-    fehler: Option<&str>,
-    protokoll: bool,
-    weiss_etwas: bool,
-    aufraeumen: bool,
-    brain: bool,
-) -> (Menu, HashMap<MenuId, Aktion>) {
+///
+/// ## Die Punkte kommen aus `menue::bauen` (Stand 28.10.2026, #9008)
+///
+/// Bis v0.5.3 stand hier eine zweite, von Hand gepflegte Fassung derselben
+/// Liste — Zeile für Zeile wie die in `linux.rs`, samt eigener `Aktion`-Aufzählung.
+/// Zwei Listen über dieselbe Sache, und sie **sind** auseinandergelaufen:
+/// „Leitung aufräumen" kam unter Linux dazu und fehlte hier eine Fassung lang.
+///
+/// `muda` braucht trotzdem eine Zuordnung Kennung → Aktion: Anders als unter
+/// Linux trägt ein Punkt seinen Rückruf nicht selbst, sondern meldet eine
+/// Kennung. Die Zuordnung wird beim Neubauen **mit** erneuert — eine alte
+/// Kennung zeigt sonst auf einen Punkt, den es nicht mehr gibt.
+fn menue(kern: &Kern) -> (Menu, HashMap<MenuId, Aktion>) {
     let menu = Menu::new();
     let mut zuordnung = HashMap::new();
 
-    // Zwei Zeilen, nicht eine: Verbindung und Leitung sind zwei Zustände.
-    let mut hinweise: Vec<String> = vec![a.verbindung.clone(), a.leitung.clone()];
+    for eintrag in menue::bauen(kern) {
+        match eintrag {
+            Eintrag::Trenner => {
+                let _ = menu.append(&PredefinedMenuItem::separator());
+            }
 
-    if let Some(lage) = &a.lage {
-        hinweise.push(lage.clone());
+            Eintrag::Zeile(text) => {
+                let _ = menu.append(&MenuItem::new(text, false, None));
+            }
+
+            // Ein Häkchen, kein Knopf — und auf allen Plattformen dasselbe.
+            // Die Begründung steht in `menue::bauen` und `Kern::umschalten`:
+            // Ein Knopf „Live einschalten" sagt nicht, ob sie gerade an ist,
+            // ein Häkchen trägt Zustand und Handlung in einem.
+            Eintrag::Haken {
+                text,
+                gesetzt,
+                aktiv,
+                aktion,
+            } => {
+                let haken = CheckMenuItem::new(text, aktiv, gesetzt, None);
+                zuordnung.insert(haken.id().clone(), aktion);
+                let _ = menu.append(&haken);
+            }
+
+            Eintrag::Punkt {
+                text,
+                aktiv,
+                aktion,
+            } => {
+                let punkt = MenuItem::new(text, aktiv, None);
+                zuordnung.insert(punkt.id().clone(), aktion);
+                let _ = menu.append(&punkt);
+            }
+        }
     }
-
-    if let Some(f) = fehler {
-        hinweise.push(format!("Fehler: {f}"));
-    }
-
-    for text in &hinweise {
-        let _ = menu.append(&MenuItem::new(text, false, None));
-    }
-
-    let _ = menu.append(&PredefinedMenuItem::separator());
-
-    // Ein Häkchen, kein Knopf — und auf allen Plattformen dasselbe. Die
-    // Begründung steht in `linux.rs` und in `Kern::umschalten`: Ein Knopf
-    // „Live einschalten" sagt nicht, ob sie gerade an ist, ein Häkchen trägt
-    // Zustand und Handlung in einem.
-    let haken = CheckMenuItem::new("Live-Leitung", weiss_etwas, an, None);
-    zuordnung.insert(haken.id().clone(), Aktion::Umschalten);
-    let _ = menu.append(&haken);
-
-    for (beschriftung, dauer) in DAUERN {
-        let punkt = MenuItem::new(format!("… ab jetzt {beschriftung}"), true, None);
-
-        zuordnung.insert(punkt.id().clone(), Aktion::An(dauer));
-        let _ = menu.append(&punkt);
-    }
-
-    // Nur im Störfall, den das Häkchen nicht abdeckt — siehe `linux.rs`.
-    if aufraeumen {
-        let aus = MenuItem::new(
-            "Leitung aufräumen (Prozess läuft ohne Schalter)",
-            true,
-            None,
-        );
-        zuordnung.insert(aus.id().clone(), Aktion::Aus);
-        let _ = menu.append(&aus);
-    }
-
-    let _ = menu.append(&PredefinedMenuItem::separator());
-
-    // Der Weg zu AI Brain — seit v0.5.3 nur noch hier, siehe `linux.rs`.
-    let brain_punkt = MenuItem::new("AI Brain öffnen", brain, None);
-    zuordnung.insert(brain_punkt.id().clone(), Aktion::Brain);
-    let _ = menu.append(&brain_punkt);
-
-    let log = MenuItem::new("Protokoll öffnen", protokoll, None);
-    zuordnung.insert(log.id().clone(), Aktion::Protokoll);
-    let _ = menu.append(&log);
-
-    let ende = MenuItem::new("Tray beenden", true, None);
-    zuordnung.insert(ende.id().clone(), Aktion::Beenden);
-    let _ = menu.append(&ende);
 
     (menu, zuordnung)
 }
@@ -255,15 +220,7 @@ pub fn starten() -> Result<(), String> {
         match ereignis {
             Event::NewEvents(StartCause::Init) => {
                 let a = kern.ansicht();
-                let (menu, neu) = menue(
-                    &a,
-                    kern.an(),
-                    None,
-                    false,
-                    kern.weiss_etwas(),
-                    kern.aufraeumen_noetig(),
-                    kern.instanz_adresse().is_some(),
-                );
+                let (menu, neu) = menue(&kern);
                 zuordnung = neu;
 
                 match TrayIconBuilder::new()
@@ -314,15 +271,14 @@ pub fn starten() -> Result<(), String> {
                 *lauf = ControlFlow::ExitWithCode(0);
             }
 
-            Event::UserEvent(Nachricht::Menue(id)) => match zuordnung.get(&id) {
-                Some(Aktion::An(dauer)) => kern.einschalten(dauer),
-                Some(Aktion::Umschalten) => kern.umschalten(),
-                Some(Aktion::Aus) => kern.ausschalten(),
-                Some(Aktion::Brain) => kern.brain_oeffnen(),
-                Some(Aktion::Protokoll) => kern.protokoll_oeffnen(),
-                Some(Aktion::Beenden) => kern.beenden(),
-                None => {}
-            },
+            // Was ein Punkt bedeutet, steht in `Kern::tun` — einmal, für
+            // alle drei Leisten. Die Aufzählung hier abzuarbeiten hiesse,
+            // die Zuordnung ein zweites Mal zu schreiben.
+            Event::UserEvent(Nachricht::Menue(id)) => {
+                if let Some(aktion) = zuordnung.get(&id).cloned() {
+                    kern.tun(&aktion);
+                }
+            }
 
             Event::UserEvent(Nachricht::Takt) => {
                 kern.wissen = harness::abfragen();
@@ -342,15 +298,7 @@ pub fn starten() -> Result<(), String> {
                 }
 
                 if let Some(t) = &symbol {
-                    let (menu, neu) = menue(
-                        &stand.0,
-                        kern.an(),
-                        stand.1.as_deref(),
-                        kern.protokoll().is_some(),
-                        kern.weiss_etwas(),
-                        kern.aufraeumen_noetig(),
-                        kern.instanz_adresse().is_some(),
-                    );
+                    let (menu, neu) = menue(&kern);
 
                     zuordnung = neu;
                     t.set_menu(Some(Box::new(menu)));

@@ -42,10 +42,13 @@ mod ansicht;
 mod autostart;
 mod harness;
 mod kern;
+mod menue;
 mod symbol;
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod popup;
 #[cfg(target_os = "linux")]
 use linux as leiste;
 
@@ -65,9 +68,16 @@ Aufrufe:
   ai-brain-tray --kein-autostart
 
 Bedienung:
-  Klick         oeffnet das Menue — links wie rechts
+  Linksklick    oeffnet das Menue, ein zweiter Klick schliesst es wieder —
+                und ein Klick daneben auch
+  Rechtsklick   oeffnet das Menue der Leiste (gleiche Punkte)
   Im Menue      Haekchen „Live-Leitung“, Dauern, AI Brain oeffnen, Protokoll
-                oeffnen, Beenden
+                oeffnen, Beenden; Esc schliesst, Pfeile und Eingabe waehlen
+
+Das Umschalten braucht ein eigenes Menuefenster, und das gibt es nur unter
+Wayland mit wlr-layer-shell (Hyprland, sway, river). Sonst oeffnet die Leiste
+das Menue selbst, und dann kann nur sie es wieder schliessen.
+AI_BRAIN_TRAY_MENUE=eigen bzw. =leiste legt es von Hand fest.
 
 Das Symbol: grau nicht verbunden, blau verbunden, gruen Leitung laeuft,
 gelb unterwegs, rot gestoert. Gefuellt heisst Leitung an, hohl heisst aus.
@@ -84,6 +94,18 @@ fn main() {
         Some("--pruefen") => leiste::pruefen(),
         Some("--autostart") => autostart::ein(),
         Some("--kein-autostart") => autostart::aus(),
+
+        // Nicht in der Hilfe: Diesen Aufruf macht der Tray an sich selbst,
+        // wenn der Linksklick das Menü öffnet. Dass er aber **aufrufbar**
+        // ist, ist kein Zufall — so lässt sich das Fenster ohne Leiste und
+        // ohne Maus prüfen:
+        //
+        //   ai-brain-tray --menue < menue.json
+        //
+        // Die Liste auf stdin ist dieselbe wie im Tray (`menue::Eintrag`),
+        // auf stdout kommt die gewählte Aktion. Siehe `popup`.
+        #[cfg(target_os = "linux")]
+        Some("--menue") => popup::als_prozess(),
         Some("--help") | Some("-h") => {
             print!("{HILFE}");
             Ok(())

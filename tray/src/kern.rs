@@ -5,9 +5,9 @@
 //! hier: welcher Harness-Aufruf zu welchem Menüpunkt gehört und wie ein Fehler
 //! aus dem Hintergrund zurückkommt.
 //!
-//! Der Klick auf das Symbol selbst steht **nicht** hier, weil er nichts mehr
-//! tut, was eine Regel bräuchte: Er öffnet das Menü, und das Menü öffnet die
-//! Leiste. Siehe `linux.rs`.
+//! Der Klick auf das Symbol selbst steht **nicht** hier, weil er nichts tut,
+//! was eine Regel bräuchte: Er öffnet das Menü und schliesst es wieder. Wer
+//! es zeigt — wir oder die Leiste —, entscheidet `linux.rs`.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -37,6 +37,13 @@ pub enum Signal {
     Wecken,
     /// „Tray beenden" wurde geklickt.
     Ende,
+    /// Im eigenen Menüfenster wurde ein Punkt gewählt (#9008).
+    ///
+    /// Das Fenster ist ein eigener Prozess; er schreibt die Aktion auf
+    /// `stdout` und endet. Ein Faden im Tray wartet darauf und schickt sie
+    /// hierher — **nicht** in den D-Bus-Faden, denn dort hält niemand mehr
+    /// den `Kern`, wenn der Klick kommt.
+    Gewaehlt(crate::menue::Aktion),
 }
 
 pub struct Kern {
@@ -114,9 +121,11 @@ impl Kern {
     ///
     /// Seit v0.5.0 hängt es als **Häkchen** im Menü: Haken rein heisst
     /// `leitung an` und hebt ein Veto auf, Haken raus heisst `leitung aus`
-    /// und setzt es. Das bleibt so — nur der Weg INS Menü hat zweimal
-    /// gewechselt: v0.5.1 auf den Rechtsklick, v0.5.3 zurück auf **beide**
-    /// Klicks. Die Begründung steht in `linux.rs` und in Bug #1124.
+    /// und setzt es. Das bleibt so — nur der Weg INS Menü hat mehrfach
+    /// gewechselt: v0.5.1 auf den Rechtsklick, v0.5.3 zurück auf beide
+    /// Klicks, und seit v0.5.4 zeigt der Linksklick unter Wayland unser
+    /// **eigenes** Menüfenster, damit ein zweiter Klick es wieder schliesst.
+    /// Die Begründung steht in `linux.rs` und in Bug #1124.
     ///
     /// Wissen wir nichts, wird NICHT geschaltet: Ein Klick, der mangels
     /// Antwort das Gegenteil des Gewollten tut, wäre der nächste Ärger.
@@ -161,7 +170,7 @@ impl Kern {
     /// das Tray-Menue aufmachen"), und damit ist hier nur noch der sichtbare
     /// Punkt im Menue uebrig.
     ///
-    /// Die vier Fassungen des Symbolklicks und ihre Gruende stehen an einer
+    /// Die fuenf Fassungen des Symbolklicks und ihre Gruende stehen an einer
     /// Stelle: an `MENU_ON_ACTIVATE` in `linux.rs`.
     ///
     /// Ohne bekannte Adresse passiert nichts, und der Punkt ist ausgegraut —
@@ -174,6 +183,32 @@ impl Kern {
 
     pub fn beenden(&self) {
         let _ = self.signal.send(Signal::Ende);
+    }
+
+    /// Eine Aktion aus dem Menü ausführen — egal, welches Menü sie geschickt
+    /// hat.
+    ///
+    /// Es gibt auf einem Linux-Rechner jetzt **zwei** Menüs für dieselben
+    /// Punkte: unser Fenster am Linksklick und das der Leiste am Rechtsklick
+    /// (#9008). Eine zweite Stelle, die entscheidet, was „AI Brain öffnen"
+    /// bedeutet, wäre die Stelle, an der die beiden auseinanderlaufen.
+    pub fn tun(&mut self, aktion: &crate::menue::Aktion) {
+        use crate::menue::Aktion;
+
+        match aktion {
+            Aktion::Umschalten => self.umschalten(),
+            Aktion::An(dauer) => self.einschalten(dauer),
+            Aktion::Aus => self.ausschalten(),
+            Aktion::Brain => self.brain_oeffnen(),
+            Aktion::Protokoll => self.protokoll_oeffnen(),
+            Aktion::Beenden => self.beenden(),
+        }
+    }
+
+    /// Ein zweites Ende des Signalwegs — für den Faden, der auf das
+    /// Menüfenster wartet.
+    pub fn signalweg(&self) -> mpsc::Sender<Signal> {
+        self.signal.clone()
     }
 
     /// Ruft den Harness im Hintergrund — `leitung aus` wartet bis zu 8 s auf
@@ -197,6 +232,17 @@ impl Kern {
 /// Den Fehler der letzten Aktion abholen (und dabei wegnehmen).
 pub fn fehler_abholen() -> Option<String> {
     FEHLER.lock().ok().and_then(|mut f| f.take())
+}
+
+/// Einen Fehler von aussen in dieselbe Ablage legen.
+///
+/// Gebraucht vom Linksklick, wenn das eigene Menüfenster nicht aufgeht
+/// (#9008): Der Klick läuft im D-Bus-Faden, wo niemand `&mut Kern` hält, und
+/// ein Klick, der stillschweigend nichts tut, ist genau die Beschwerde, mit
+/// der Bug #1124 angefangen hat. So steht der Grund beim nächsten Takt im
+/// Menü — in dem der Leiste, das in diesem Fall noch geht.
+pub fn fehler_melden(grund: String) {
+    FEHLER.lock().map(|mut f| *f = Some(grund)).ok();
 }
 
 pub fn jetzt() -> i64 {

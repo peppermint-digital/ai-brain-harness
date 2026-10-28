@@ -1,6 +1,6 @@
 [package]
 name = "ai-brain-tray"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Tray für den AI-Brain-Harness: zeigt die Live-Leitung und schaltet sie"
 license = "MIT"
@@ -13,8 +13,30 @@ ai-brain-plattform = { path = "../plattform" }
 
 # Linux: StatusNotifierItem ueber D-Bus, reines Rust, ohne GTK.
 # Ohne tokio: der blockierende Weg ueber async-io reicht fuer ein Menue.
+#
+# Dazu seit v0.5.4 (#9008) das eigene Menuefenster: wlr-layer-shell ueber
+# Wayland, auch das in reinem Rust.
+#
+# `wayland-client` OHNE das Merkmal `system` — dann nimmt es die eigene
+# Rust-Fassung des Protokolls statt libwayland. Das ist hier keine Vorliebe,
+# sondern haelt drei Zusagen:
+#
+#   * Das Programm bleibt EINE Datei ohne Systembibliothek. Der Tray kommt
+#     per `curl | sh` auf einen Rechner; eine Abhaengigkeit, die beim Start
+#     fehlt, waere ein Tray, der nicht erscheint und nicht sagt warum.
+#   * Der Bau in der CI braucht kein `libwayland-dev`. Die Werkstatt baut
+#     heute ohne Systempakete, und das soll so bleiben.
+#   * Kein GTK, kein libxkbcommon, kein gtk-layer-shell. Der Tray laeuft
+#     auch auf einer Installation, die von GTK nichts weiss.
+#
+# `fontdue` rastert die Buchstaben (reines Rust, no_std-faehig). Welche
+# Schrift, sagt `fc-match` — dieselbe Frage, die Omarchys Leiste stellt.
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+fontdue = { version = "0.9", default-features = false, features = ["std"] }
 
 # macOS und Windows: NSStatusItem bzw. Shell_NotifyIcon ueber tray-icon, dazu
 # tao als Ereignisschleife (beides nimmt die Leiste nur aus einem laufenden
