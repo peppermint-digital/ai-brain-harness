@@ -843,9 +843,10 @@ AI Brain freigegeben hat. Damit gibt es drei Einträge in `leitung.json`, und
 | nein | nein | **ja** | **an** | Automatisch, mit Bedingung |
 | nein | nein | nein | **aus** | Niemand hat eingeschaltet |
 
-**Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und der
-Linksklick im Tray schreiben es, `leitung an` und der Linksklick löschen es —
-und nichts sonst. Wäre „aus" bloss ein gelöschtes `auto`, würde die nächste
+**Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und das
+Häkchen „Live-Leitung" im Tray-Menü schreiben es, `leitung an` und dasselbe
+Häkchen löschen es — und nichts sonst. (Bis v0.5.0 hing das am Linksklick auf
+das Symbol; der öffnet seit v0.5.3 wieder das Menü.) Wäre „aus" bloss ein gelöschtes `auto`, würde die nächste
 Auskunft von AI Brain es binnen einer Minute wieder setzen: ein Schalter, der
 sich selbst zurückstellt, ist kein Schalter. Und ein Veto mit Ablaufzeit ginge
 wieder an, wenn niemand hinsieht.
@@ -1038,15 +1039,15 @@ ohnehin, ob sie steht.
 
 #### Bedienung und Symbol
 
-- **Rechtsklick** öffnet das Menü — wie bei den anderen Symbolen derselben
-  Leiste.
-- **Linksklick** öffnet AI Brain im Browser (die Adresse der Instanz, mit der
-  dieser Rechner verbunden ist). Derselbe Weg steht als **„AI Brain öffnen"**
-  im Menü; ohne bekannte Adresse ist der Punkt ausgegraut und der Klick still.
+- **Ein Klick öffnet das Menü — links wie rechts.** Die Leiste öffnet es
+  selbst (`ItemIsMenu`), wir liefern nur den Inhalt.
 - Die Leitung schaltet das **Häkchen „Live-Leitung"** im Menü, nicht der Klick
   auf das Symbol.
+- **„AI Brain öffnen"** steht als Punkt im Menü: die Adresse der Instanz, mit
+  der dieser Rechner verbunden ist. Ohne bekannte Adresse ist der Punkt
+  ausgegraut — eine erfundene URL wäre schlimmer als ein Klick, der nichts tut.
 
-**Drei Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
+**Vier Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
 freigelegt (Stand 28.10.2026).**
 
 1. **Gar nichts** (bis v0.4.1): `Activate` war nicht behandelt. In den meisten
@@ -1058,31 +1059,56 @@ freigelegt (Stand 28.10.2026).**
 2. **Die Leitung schalten** (v0.4.2): löste den toten Klick. Ein Symbolklick,
    der etwas schaltet, ist aber in keiner anderen Leiste so — die Umschaltung
    sitzt seit v0.5.0 deshalb als Häkchen im Menü.
-3. **Das Menü öffnen** (v0.5.0, `ItemIsMenu` / `MENU_ON_ACTIVATE`):
-   spezifikationstreu und in Bastians Leiste trotzdem falsch. Das Menü ließ
-   sich per Linksklick nicht mehr schließen (Bug #1124).
+3. **Das Menü öffnen** (v0.5.0, `ItemIsMenu` / `MENU_ON_ACTIVATE`): in Omarchys
+   Leiste ließ sich das Menü per Linksklick nicht mehr schließen (Bug #1124).
+4. **AI Brain öffnen** (v0.5.1): Rechtsklick fürs Menü, Linksklick für die
+   Anwendung — „wie die anderen". Grundlage war Bastians Antwort auf eine
+   Rückfrage, und die haben wir anders gelesen, als sie gemeint war.
 
-Dazu die Messung, die den Punkt entschieden hat — im Quelltext der Leiste
-selbst (Omarchy 4.0.0.alpha, **quickshell**, nicht waybar,
-`/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`):
+**Jetzt (v0.5.3) ist es wieder das Menü, und zwar auf Ansage.** Bastian am
+28.10.2026, wörtlich: *„Der Harness macht jetzt auf Klick AI-Brain auf, aber
+der sollte doch einfach nur das Tray-Menü aufmachen. Mit Linksklick."* Die
+Entscheidung steht damit nicht mehr auf einer Auslegung, sondern auf einem
+Satz. Der Weg zu AI Brain bleibt, sichtbar als Menüpunkt.
 
-- Ein Linksklick auf ein Item mit `onlyMenu` (= `ItemIsMenu`) ruft
-  `openTrayMenu()`, und das endet **immer** mit `trayMenuOpen = true`. Es gibt
-  kein Umschalten, `resetTrayMenu()` schließt nichts — ein zweiter Linksklick
-  öffnet neu.
-- Der Fokus-Griff des Menüs (`HyprlandFocusGrab` in `Ui/PopupCard.qml`) listet
+#### Die Kehrseite, bekannt und benannt
+
+In Omarchys Leiste (quickshell, Paket 4.0.4-1) **schließt ein zweiter
+Linksklick das Menü nicht**; nur ein Klick außerhalb der Leiste macht es zu.
+Nachgelesen im Quelltext der Leiste selbst, am 27.10. und noch einmal am
+28.10.2026 — unverändert:
+
+- `plugins/bar/widgets/Tray.qml`: Ein Klick auf ein Item mit `onlyMenu`
+  (= `ItemIsMenu`) ruft `displayMenu()` → `openTrayMenu()`, und das endet
+  **immer** mit `trayMenuOpen = true`. Ein Umschalten gibt es nicht; `close()`
+  ist vorhanden, wird von dort aber nicht gerufen.
+- `Ui/PopupCard.qml`: Der Fokus-Griff (`HyprlandFocusGrab`) listet
   `[popup, Leistenfenster]`. Ein Klick **auf** der Leiste klärt ihn deshalb
-  nie, einer außerhalb schon. Esc ist dort nicht verdrahtet.
+  nie, einer außerhalb schon.
 
-Beides gehört der Leiste. Gemeldet wird es dort; gepatcht wird dort nichts —
-ein Patch an einer Paketdatei ist beim nächsten Update weg. Deshalb jetzt
-`MENU_ON_ACTIVATE = false` und unter macOS und Windows
-`with_menu_on_left_click(false)`: Das Menü gehört dem Rechtsklick, und der
-Linksklick öffnet die Anwendung. Unsere Anwendung ist AI Brain.
+**Auf unserer Seite ist das nicht umgehbar.** StatusNotifierItem kennt keinen
+Weg, dem Host „schließ mein Menü" zu sagen: Das Menü ist sein Fenster, wir
+liefern über DBusMenu nur den Inhalt. Mit `ItemIsMenu = true` erfahren wir vom
+Klick nicht einmal — `Activate` kommt nicht mehr an. Abmelden und neu anmelden,
+um ein Popup wegzubekommen, würde das Symbol flackern lassen und den Fehler
+gegen einen schlimmeren tauschen. Gemeldet wird der Punkt bei Omarchy; gepatcht
+wird dort nichts — ein Patch an einer Paketdatei ist beim nächsten Update weg.
+
+Bastian kennt die Kehrseite und will den Linksklick trotzdem. Das ist die
+Reihenfolge: erst was er bedienen will, dann was wir elegant finden.
+
+#### Die Konvention je Plattform
+
+| | Linksklick | Warum |
+|---|---|---|
+| Linux | Menü | `ItemIsMenu`; so machen es GNOME, KDE und quickshell |
+| macOS | Menü | **die Norm.** Ein `NSStatusItem` mit Menü zeigt es bei jedem Klick; für Menüleisten-Extras gibt es keine zweite Gestik |
+| Windows | Menü | **bewusste Abweichung.** Im Infobereich wäre der Linksklick die Standardaktion. Dieser Tray hat aber kein Hauptfenster, das eine Standardaktion öffnen könnte — und der Rechtsklick führt zum selben Menü, es geht also keine Gewohnheit verloren |
 
 > Dass eine Begründung technisch richtig ist, heißt nicht, dass das Ergebnis
-> stimmt. „Die Leiste soll das Menü öffnen" war korrekt hergeleitet — und die
-> Leiste macht daraus kein Umschalten.
+> stimmt — und dass eine Rückfrage beantwortet wurde, heißt nicht, dass die
+> Antwort so gemeint war, wie wir sie gelesen haben. Beides hat diesen Klick je
+> eine Fassung gekostet.
 
 Das Symbol wird **selbst gezeichnet** und nennt keinen Theme-Symbolnamen. Mit
 `network-*` aus dem Theme kam es auf einer dunklen Leiste als dunkel auf dunkel

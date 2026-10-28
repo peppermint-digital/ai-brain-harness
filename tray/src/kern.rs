@@ -2,9 +2,12 @@
 //!
 //! Die Leisten sind drei (StatusNotifierItem, NSStatusItem, Shell_NotifyIcon),
 //! die Bedienung ist eine. Alles, was mehr als Zeichnen ist, steht deshalb
-//! hier: welcher Harness-Aufruf zu welchem Menüpunkt gehört, was ein
-//! Linksklick heisst ({@link Kern::brain_oeffnen}), und wie ein Fehler aus dem
-//! Hintergrund zurückkommt.
+//! hier: welcher Harness-Aufruf zu welchem Menüpunkt gehört und wie ein Fehler
+//! aus dem Hintergrund zurückkommt.
+//!
+//! Der Klick auf das Symbol selbst steht **nicht** hier, weil er nichts mehr
+//! tut, was eine Regel bräuchte: Er öffnet das Menü, und das Menü öffnet die
+//! Leiste. Siehe `linux.rs`.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -18,8 +21,11 @@ pub const TAKT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Die Dauern im Menü. 8 h ist die Obergrenze des Harness.
 pub const DAUERN: [(&str, &str); 3] = [("30 min", "30m"), ("2 h", "2h"), ("8 h", "8h")];
 
-/// Was ein Linksklick einschaltet, wenn die Leitung aus ist — dieselbe
-/// Vorgabe wie `leitung an` ohne `--dauer`.
+/// Was das Häkchen einschaltet, wenn die Leitung aus ist — dieselbe Vorgabe
+/// wie `leitung an` ohne `--dauer`.
+///
+/// Der Name stammt aus der Zeit, in der der Linksklick geschaltet hat (v0.4.2).
+/// Er bleibt, weil er in der Vorgeschichte und in #8932 so zitiert ist.
 pub const KLICK_DAUER: &str = "30m";
 
 /// Der Fehler der letzten Aktion, vom Hintergrund-Faden an die Abfrage.
@@ -108,9 +114,9 @@ impl Kern {
     ///
     /// Seit v0.5.0 hängt es als **Häkchen** im Menü: Haken rein heisst
     /// `leitung an` und hebt ein Veto auf, Haken raus heisst `leitung aus`
-    /// und setzt es. Das bleibt so — nur der Weg INS Menü hat sich noch
-    /// einmal geändert: Rechtsklick statt Linksklick, siehe
-    /// {@link Kern::brain_oeffnen} und Bug #1124.
+    /// und setzt es. Das bleibt so — nur der Weg INS Menü hat zweimal
+    /// gewechselt: v0.5.1 auf den Rechtsklick, v0.5.3 zurück auf **beide**
+    /// Klicks. Die Begründung steht in `linux.rs` und in Bug #1124.
     ///
     /// Wissen wir nichts, wird NICHT geschaltet: Ein Klick, der mangels
     /// Antwort das Gegenteil des Gewollten tut, wäre der nächste Ärger.
@@ -144,32 +150,22 @@ impl Kern {
         }
     }
 
-    /// Was der Linksklick tut: AI Brain im Browser oeffnen (#1124).
+    /// Der Menuepunkt „AI Brain oeffnen" (#1124).
     ///
-    /// ## Warum der Linksklick das ist und nicht das Menue
+    /// ## Vom Linksklick zum Menuepunkt
     ///
-    /// Drei Fassungen hat dieser Klick gehabt, und jede hat den naechsten
-    /// Punkt freigelegt:
+    /// Diesen Weg gibt es seit v0.5.1, und dort hing er am **Linksklick**:
+    /// Rechtsklick oeffnete das Menue, Linksklick die Anwendung — wie bei den
+    /// anderen Symbolen in Bastians Leiste. Seit v0.5.3 oeffnet der Linksklick
+    /// wieder das Menue (Bastian am 28.10.2026: „der sollte doch einfach nur
+    /// das Tray-Menue aufmachen"), und damit ist hier nur noch der sichtbare
+    /// Punkt im Menue uebrig.
     ///
-    /// 1. **Gar nichts** (bis v0.4.1). `Activate` war nicht behandelt, der
-    ///    Klick fiel ins Leere, und von aussen sah das aus wie ein Tray, der
-    ///    sich nicht bedienen laesst.
-    /// 2. **Die Leitung schalten** (v0.4.2). Loeste den toten Klick — und ein
-    ///    Symbolklick, der etwas schaltet, ist in keiner anderen Leiste so.
-    /// 3. **Das Menue oeffnen** (v0.5.0, `ItemIsMenu`). Richtig nach der
-    ///    Spezifikation, und in Bastians Leiste trotzdem falsch: Omarchys
-    ///    quickshell-Leiste oeffnet das Menue bei jedem Linksklick NEU, statt
-    ///    umzuschalten — es liess sich per Linksklick nicht mehr schliessen
-    ///    (Bug #1124). Siehe die Messung in `linux.rs`.
+    /// Die vier Fassungen des Symbolklicks und ihre Gruende stehen an einer
+    /// Stelle: an `MENU_ON_ACTIVATE` in `linux.rs`.
     ///
-    /// Jetzt ist es, was Bastian entschieden hat und was die anderen Symbole
-    /// in derselben Leiste tun: **Rechtsklick oeffnet das Menue, Linksklick
-    /// oeffnet die Anwendung.** Unsere Anwendung ist AI Brain, und die liegt
-    /// im Browser.
-    ///
-    /// Ohne bekannte Adresse passiert nichts — eine erfundene URL waere
-    /// schlimmer als ein Klick, der nichts tut. Der Menuepunkt „AI Brain
-    /// oeffnen" ist dann ebenfalls ausgegraut und sagt damit, woran es liegt.
+    /// Ohne bekannte Adresse passiert nichts, und der Punkt ist ausgegraut —
+    /// eine erfundene URL waere schlimmer als ein Klick, der nichts tut.
     pub fn brain_oeffnen(&self) {
         if let Some(adresse) = self.instanz_adresse() {
             harness::oeffnen(&adresse);
@@ -222,14 +218,14 @@ mod tests {
         (k, rx)
     }
 
-    /// #1124: Woher der Linksklick seine Adresse nimmt — und wann nicht.
+    /// #1124: Woher „AI Brain oeffnen" seine Adresse nimmt — und wann nicht.
     ///
     /// Die drei Schichten aus #8914 gelten hier genauso: „weiss ich nicht"
     /// ist nicht „nicht verbunden", und beides ist nicht „Adresse da". Ein
-    /// Klick, der aus Unwissen irgendeine URL oeffnet, waere schlimmer als
-    /// einer, der nichts tut.
+    /// Punkt, der aus Unwissen irgendeine URL oeffnet, waere schlimmer als
+    /// einer, der ausgegraut ist.
     #[test]
-    fn die_adresse_fuer_den_linksklick_wird_nicht_erfunden() {
+    fn die_adresse_fuer_ai_brain_wird_nicht_erfunden() {
         use crate::ansicht::Verbindung;
 
         // Harness zu alt: Feld fehlt ganz.

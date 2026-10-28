@@ -33,7 +33,7 @@ use std::sync::mpsc;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::ansicht::Ansicht;
 use crate::harness;
@@ -62,7 +62,8 @@ enum Aktion {
     /// Das Häkchen: an, wenn aus — aus, wenn an.
     Umschalten,
     Aus,
-    /// AI Brain im Browser öffnen — dasselbe wie der Linksklick (#1124).
+    /// AI Brain im Browser öffnen. Seit v0.5.3 nur von hier aus: Der
+    /// Linksklick öffnet das Menü (#1124).
     Brain,
     Protokoll,
     Beenden,
@@ -72,8 +73,6 @@ enum Aktion {
 enum Nachricht {
     /// Zeit, den Zustand neu zu lesen.
     Takt,
-    /// Linksklick auf das Symbol (#1124).
-    Klick,
     Menue(MenuId),
     Ende,
 }
@@ -136,7 +135,7 @@ fn menue(
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    // Derselbe Weg wie der Linksklick, nur sichtbar — siehe `linux.rs`.
+    // Der Weg zu AI Brain — seit v0.5.3 nur noch hier, siehe `linux.rs`.
     let brain_punkt = MenuItem::new("AI Brain öffnen", brain, None);
     zuordnung.insert(brain_punkt.id().clone(), Aktion::Brain);
     let _ = menu.append(&brain_punkt);
@@ -212,7 +211,7 @@ pub fn starten() -> Result<(), String> {
 
     let schleife = EventLoopBuilder::<Nachricht>::with_user_event().build();
 
-    // Drei Quellen, ein Weg hinein: Menü, Symbolklick und der eigene Takt.
+    // Zwei Quellen, ein Weg hinein: Menü und der eigene Takt.
     let bote = schleife.create_proxy();
     let bote_menue = bote.clone();
 
@@ -220,25 +219,10 @@ pub fn starten() -> Result<(), String> {
         let _ = bote_menue.send_event(Nachricht::Menue(e.id));
     }));
 
-    // Linksklick öffnet AI Brain im Browser — das Gegenstück zu `activate`
-    // unter Linux (#1124). Die Begründung steht in `linux.rs` und an
-    // `Kern::brain_oeffnen`; hier zählt, dass es auf allen drei Plattformen
-    // dasselbe ist. Ein Tray, der sich je Leiste anders bedienen lässt, ist
-    // drei Trays.
-    let bote_klick = bote.clone();
-
-    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
-        // Nur der Linksklick, und nur beim Loslassen: Sonst löst ein
-        // einziger Klick zweimal aus (Down und Up).
-        if let TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        } = e
-        {
-            let _ = bote_klick.send_event(Nachricht::Klick);
-        }
-    }));
+    // Kein `TrayIconEvent`-Handler mehr (bis v0.5.2 hing dort der Linksklick
+    // auf „AI Brain öffnen"). Die Leiste zeigt das Menü jetzt selbst, und
+    // `tray-icon` meldet den Klick **trotzdem** — beides zu behandeln hiesse,
+    // ein Fenster aufzumachen, während sich darüber ein Menü öffnet.
 
     let (signal, geweckt) = mpsc::channel();
     let bote_signal = bote.clone();
@@ -285,11 +269,27 @@ pub fn starten() -> Result<(), String> {
                 match TrayIconBuilder::new()
                     .with_tooltip(a.kurz())
                     .with_menu(Box::new(menu))
-                    // Das Menü gehört dem Rechtsklick, der Linksklick öffnet
-                    // AI Brain (#1124) — wie bei den anderen Symbolen in
-                    // Bastians Leiste. `false` ist hier also keine fehlende
-                    // Bequemlichkeit, sondern die Entscheidung.
-                    .with_menu_on_left_click(false)
+                    // Linksklick öffnet das Menü — wie unter Linux
+                    // (#1124, Bastians Wunsch vom 28.10.2026).
+                    //
+                    // ## Die Konvention, je Plattform
+                    //
+                    // **macOS:** genau so. Ein `NSStatusItem` mit Menü zeigt
+                    // es bei jedem Klick; Apples Richtlinien kennen für
+                    // Menüleisten-Extras keine zweite Gestik. `true` ist hier
+                    // also nicht nur Bastians Wunsch, sondern die Norm — und
+                    // `false` war seit v0.5.1 der Ausreisser.
+                    //
+                    // **Windows:** dort ist die Norm eine andere. Der
+                    // Infobereich trennt Linksklick (Standardaktion, meist
+                    // das Hauptfenster) von Rechtsklick (Kontextmenü). Wir
+                    // weichen bewusst ab, aus zwei Gründen: Dieser Tray hat
+                    // **kein Hauptfenster**, das eine Standardaktion öffnen
+                    // könnte — die Anwendung liegt im Browser —, und ein
+                    // Tray, der sich je Leiste anders bedienen lässt, ist
+                    // drei Trays. Der Rechtsklick führt zum selben Menü, es
+                    // geht also keine Gewohnheit verloren.
+                    .with_menu_on_left_click(true)
                     .build()
                 {
                     Ok(t) => {
@@ -313,8 +313,6 @@ pub fn starten() -> Result<(), String> {
                 symbol = None;
                 *lauf = ControlFlow::ExitWithCode(0);
             }
-
-            Event::UserEvent(Nachricht::Klick) => kern.brain_oeffnen(),
 
             Event::UserEvent(Nachricht::Menue(id)) => match zuordnung.get(&id) {
                 Some(Aktion::An(dauer)) => kern.einschalten(dauer),

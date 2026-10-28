@@ -1,7 +1,7 @@
 //! Die Leiste unter Linux: StatusNotifierItem über D-Bus (ksni).
 //!
-//! Reines Rust, ohne GTK. Läuft in waybar (Omarchy), KDE und GNOME mit
-//! AppIndicator-Erweiterung.
+//! Reines Rust, ohne GTK. Läuft in quickshell (Omarchy), waybar, KDE und
+//! GNOME mit AppIndicator-Erweiterung.
 //!
 //! Hier steht nur das Anbinden an die Leiste. Was angezeigt wird, steht in
 //! `ansicht`, was passiert, in `kern` — beide ohne D-Bus, damit macOS und
@@ -23,56 +23,66 @@ struct Tray {
 }
 
 impl ksni::Tray for Tray {
-    /// **Rechtsklick öffnet das Menü, Linksklick öffnet AI Brain.**
+    /// **Ein Klick öffnet das Menü — links wie rechts.**
     ///
-    /// `false` heisst: Die Leiste ruft bei einem Linksklick `Activate`, und
-    /// das ist {@link Tray::activate} hier drunter. Genau so verhalten sich
-    /// die anderen Symbole in derselben Leiste, und das war Bastians
-    /// Entscheidung zu Bug #1124: „wie die anderen".
+    /// `true` heisst: Die Leiste behandelt das Item als Menü (`ItemIsMenu`),
+    /// öffnet es beim Linksklick selbst und ruft kein `Activate`. `ksni`
+    /// setzt dafür die SNI-Eigenschaft **und** antwortet auf `Activate` mit
+    /// `UnknownMethod("ItemIsMenu")`, woran GNOME und KDE &lt; 6.4 den
+    /// Menüweg erkennen.
     ///
-    /// ## Die Fassung davor war spezifikationstreu und trotzdem falsch
+    /// ## Das ist die vierte Fassung dieses Klicks, und sie ist eine Ansage
     ///
-    /// v0.5.0 setzte hier `true`. Das ist der von StatusNotifierItem
-    /// vorgesehene Weg, ein Menü vom Host öffnen zu lassen (`ItemIsMenu`;
-    /// `ksni` setzt die Eigenschaft und antwortet auf `Activate` zusätzlich
-    /// mit `UnknownMethod`, woran GNOME und KDE &lt; 6.4 es erkennen). Der
-    /// Gedanke war: Wer das Menü selbst öffnet, kann es nicht schliessen —
-    /// also soll es die Leiste öffnen, dann schliesst sie es auch.
+    /// Bastian am 28.10.2026, wörtlich: *„Der Harness macht jetzt auf Klick
+    /// AI-Brain auf, aber der sollte doch einfach nur das Tray-Menü
+    /// aufmachen. Mit Linksklick."*
     ///
-    /// Gemessen am 27.10.2026 im Quelltext der Leiste, die Bastian benutzt
-    /// (Omarchy 4.0.0.alpha, **quickshell**, nicht waybar —
-    /// `/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`):
+    /// Damit ist v0.5.1 zurückgenommen. Dort stand hier `false`, und der
+    /// Linksklick öffnete AI Brain im Browser — auf Grundlage seiner Antwort
+    /// „wie die anderen" auf eine Rückfrage zu Bug #1124. Gemeint war etwas
+    /// anderes, als wir daraus gelesen haben. Die Entscheidung steht also
+    /// nicht mehr auf einer Auslegung, sondern auf einem Satz.
     ///
-    /// - Ein Linksklick auf ein Item mit `onlyMenu` (= `ItemIsMenu`) ruft
-    ///   `openTrayMenu()`, und das endet **immer** mit `trayMenuOpen = true`.
-    ///   Es gibt kein Umschalten; `resetTrayMenu()` schliesst nichts. Ein
-    ///   zweiter Linksklick öffnet also neu statt zu schliessen.
-    /// - Der Fokus-Griff des Menüs (`HyprlandFocusGrab` in
-    ///   `Ui/PopupCard.qml`) listet `[popup, Leistenfenster]`. Ein Klick AUF
-    ///   der Leiste klärt ihn deshalb nie.
+    /// Was das Menü *kann*, ändert sich nicht: Das Häkchen „Live-Leitung"
+    /// schaltet die Leitung, und „AI Brain öffnen" ist weiter drin — der Weg
+    /// aus v0.5.1 bleibt, er hängt nur nicht mehr am Klick auf das Symbol.
     ///
-    /// Beides gehört der Leiste und nicht uns. Gemeldet wird es dort; gepatcht
-    /// wird dort nichts — ein Patch an einer Paketdatei ist beim nächsten
-    /// Update weg, und Bastian braucht ein Tray, das sich heute wie die
-    /// anderen bedient.
+    /// ## Die Kehrseite ist bekannt, gemessen und bleibt
     ///
-    /// > Dass eine Begründung technisch richtig ist, heisst nicht, dass das
-    /// > Ergebnis stimmt. „Die Leiste soll das Menü öffnen" war korrekt
-    /// > hergeleitet — und die Leiste macht daraus kein Umschalten.
+    /// In Omarchys Leiste (quickshell, Paket 4.0.4-1) schliesst ein **zweiter
+    /// Linksklick das Menü nicht**; nur ein Klick ausserhalb der Leiste macht
+    /// es zu. Nachgelesen am 28.10.2026 im Quelltext
+    /// `/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`
+    /// (unverändert gegenüber dem 27.10.):
     ///
-    /// Die Umschaltung der Leitung bleibt da, wo sie seit v0.5.0 sitzt: als
-    /// Häkchen im Menü, nicht am Klick auf das Symbol.
-    const MENU_ON_ACTIVATE: bool = false;
+    /// - `MouseArea.onClicked` ruft bei `modelData.onlyMenu` (= `ItemIsMenu`)
+    ///   `displayMenu()` → `openTrayMenu()`, und das endet **immer** mit
+    ///   `trayMenuOpen = true`. Ein Umschalten gibt es nicht; `close()`
+    ///   existiert, wird aber von dort nicht gerufen.
+    /// - Der Fokus-Griff (`HyprlandFocusGrab` in `Ui/PopupCard.qml`) listet
+    ///   `[popup, Leistenfenster]`. Ein Klick AUF der Leiste klärt ihn
+    ///   deshalb nie.
+    ///
+    /// **Auf unserer Seite ist das nicht umgehbar**, und das ist keine
+    /// Bequemlichkeit: StatusNotifierItem kennt keinen Weg, dem Host „schliess
+    /// mein Menü" zu sagen — das Menü ist sein Fenster, wir liefern nur den
+    /// Inhalt über DBusMenu. Mit `ItemIsMenu = true` erfahren wir vom Klick
+    /// nicht einmal (`Activate` kommt nicht mehr an), und selbst wenn:
+    /// Abmelden und neu anmelden, um ein Popup wegzubekommen, würde das
+    /// Symbol flackern lassen und den Fehler gegen einen schlimmeren
+    /// tauschen. Gemeldet wird der Punkt bei Omarchy (#8958); gepatcht wird
+    /// dort nichts, ein Patch an einer Paketdatei ist beim nächsten Update
+    /// weg.
+    ///
+    /// Bastian kennt die Kehrseite und will den Linksklick trotzdem. Siehe
+    /// Bug #1124.
+    const MENU_ON_ACTIVATE: bool = true;
 
-    /// Linksklick: AI Brain im Browser öffnen (#1124).
-    ///
-    /// Die Entscheidung dahinter steht an {@link crate::kern::Kern::brain_oeffnen}.
-    /// Hier ist nur die Anbindung — und sie ist bewusst dünn: `activate`
-    /// läuft im D-Bus-Faden, und alles, was länger dauert, gehört nicht
-    /// hinein. `oeffnen` startet den Browser und wartet nicht auf ihn.
-    fn activate(&mut self, _x: i32, _y: i32) {
-        self.kern.brain_oeffnen();
-    }
+    // Kein `activate` mehr: Mit `MENU_ON_ACTIVATE = true` ruft `ksni` es
+    // nicht, sondern beantwortet `Activate` mit `UnknownMethod`. Eine
+    // Behandlung hier wäre toter Code, der aussieht wie eine Zusage — und
+    // „Linksklick öffnet AI Brain" stand genau so bis v0.5.2 hier. Den Weg
+    // selbst gibt es weiter, sichtbar als Menüpunkt „AI Brain öffnen".
 
     fn id(&self) -> String {
         "ai-brain-tray".into()
@@ -219,9 +229,10 @@ impl ksni::Tray for Tray {
 
         eintraege.push(MenuItem::Separator);
 
-        // Derselbe Weg wie der Linksklick, nur sichtbar. Ein Klick, dessen
-        // Wirkung nirgends steht, ist ein Geheimnis; und ohne bekannte
-        // Adresse sagt der ausgegraute Punkt, woran es liegt.
+        // Der Weg zu AI Brain — seit v0.5.3 nur noch hier, nicht mehr am
+        // Linksklick (der öffnet das Menü). Ohne bekannte Adresse ist der
+        // Punkt ausgegraut und sagt damit, woran es liegt; eine erfundene
+        // URL wäre schlimmer als ein Klick, der nichts tut.
         eintraege.push(
             StandardItem {
                 label: "AI Brain öffnen".into(),
@@ -324,5 +335,31 @@ pub fn starten() -> Result<(), String> {
             }
             _ => continue,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Die Zusage aus #1124/#9006, in einer Zeile festgenagelt.
+    ///
+    /// Diese Konstante ist die ganze Entscheidung: `true` heisst, die Leiste
+    /// öffnet das Menü beim Linksklick selbst. Sie hat zwischen v0.5.0,
+    /// v0.5.1 und v0.5.3 dreimal den Wert gewechselt, und jedes Mal war der
+    /// Grund eine Aussage von Bastian — nicht etwas, das man beim Aufräumen
+    /// nebenbei umdreht. Deshalb steht hier eine Probe und kein Kommentar.
+    ///
+    /// Geprüft wird sie in einem `const`-Block, nicht zur Laufzeit: Der Wert
+    /// ist zur Übersetzungszeit bekannt, also soll der Übersetzer schimpfen
+    /// und nicht erst der Testlauf.
+    #[test]
+    fn der_linksklick_oeffnet_das_menue() {
+        const {
+            assert!(
+                <Tray as ksni::Tray>::MENU_ON_ACTIVATE,
+                "ItemIsMenu muss true bleiben — Bastians Wunsch vom 28.10.2026"
+            )
+        };
     }
 }
