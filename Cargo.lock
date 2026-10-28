@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "ai-brain-plattform"
-version = "0.5.3"
+version = "0.5.4"
 
 [[package]]
 name = "ai-brain-tray"
