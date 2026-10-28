@@ -88,7 +88,7 @@ use crate::menue::{Aktion, Eintrag};
 
 use super::farben::Stil;
 use super::hyprland;
-use super::malen::Aufbau;
+use super::malen::{Anker, Aufbau};
 use super::schrift::Schrift;
 
 /// Die Namen, unter denen die Flächen in `hyprctl layers` auftauchen.
@@ -337,7 +337,13 @@ pub fn zeigen(eintraege: Vec<Eintrag>) -> Result<Option<Aktion>, String> {
             .position(|f| f.name.as_deref() == Some(stelle.ausgabe.as_str()));
 
         if let Some(i) = i {
-            if let Err(grund) = z.kasten_anlegen(&qh, i, stelle.x, stelle.y) {
+            let anker = Anker {
+                maus_x: stelle.x,
+                maus_y: stelle.y,
+                leiste: stelle.leiste,
+            };
+
+            if let Err(grund) = z.kasten_anlegen(&qh, i, anker) {
                 z.abraeumen();
                 return Err(grund);
             }
@@ -384,7 +390,13 @@ pub fn zeigen(eintraege: Vec<Eintrag>) -> Result<Option<Aktion>, String> {
 
         sagen!("kein Zeiger zu finden, Kasten in die Ecke");
 
-        if let Err(grund) = z.kasten_anlegen(&qh, 0, (b - 24) as f64, 14.0_f64.min(h as f64)) {
+        let anker = Anker {
+            maus_x: (b - 24) as f64,
+            maus_y: 14.0_f64.min(h as f64),
+            leiste: None,
+        };
+
+        if let Err(grund) = z.kasten_anlegen(&qh, 0, anker) {
             z.abraeumen();
             return Err(grund);
         }
@@ -650,8 +662,7 @@ impl Zustand {
         &mut self,
         qh: &QueueHandle<Self>,
         i: usize,
-        maus_x: f64,
-        maus_y: f64,
+        anker: Anker,
     ) -> Result<(), String> {
         if self.kasten.is_some() {
             return Ok(());
@@ -679,8 +690,7 @@ impl Zustand {
             &self.stil,
             &mut schrift,
             skalierung,
-            maus_x,
-            maus_y,
+            anker,
             flaeche_breite,
             flaeche_hoehe,
         );
@@ -817,7 +827,16 @@ impl Zustand {
         match wer {
             Wer::Faenger(i) => {
                 if self.kasten.is_none() {
-                    if let Err(grund) = self.kasten_anlegen(qh, i, x, y) {
+                    // Ohne Leiste: Dieser Weg greift nur, wenn Hyprland die
+                    // Auskunft nicht gab — dann gibt es auch keine
+                    // Leistengeometrie, und es bleibt beim Zeiger.
+                    let anker = Anker {
+                        maus_x: x,
+                        maus_y: y,
+                        leiste: None,
+                    };
+
+                    if let Err(grund) = self.kasten_anlegen(qh, i, anker) {
                         self.fehler = Some(grund);
                         self.fertig = true;
                     }
@@ -1293,9 +1312,36 @@ mod tests {
         let stil = Stil::default();
         let mut s = Schrift::laden(stil.schriftgrad).ok()?;
 
+        let anker = Anker {
+            maus_x: 900.0,
+            maus_y: 20.0,
+            leiste: None,
+        };
+
         Some(Aufbau::rechnen(
-            &liste, &stil, &mut s, 1.0, 900.0, 20.0, 1920, 1080,
+            &liste, &stil, &mut s, 1.0, anker, 1920, 1080,
         ))
+    }
+
+    /// Unsere Namensräume fangen mit dem Präfix an, nach dem
+    /// `hyprland::flaeche_finden` eigene Flächen überspringt.
+    ///
+    /// Ohne diese Probe ist der Zusammenhang zwischen den beiden Konstanten
+    /// hier und der einen dort eine Verabredung, die beim nächsten Umbenennen
+    /// lautlos reisst — und dann richtet sich das Menü an seinem eigenen
+    /// Auffänger aus.
+    #[test]
+    fn die_eigenen_namensraeume_tragen_das_praefix() {
+        let praefix = hyprland::EIGENER_NAMENSRAUM;
+
+        assert!(
+            NAMENSRAUM_KASTEN.starts_with(praefix),
+            "{NAMENSRAUM_KASTEN}"
+        );
+        assert!(
+            NAMENSRAUM_FAENGER.starts_with(praefix),
+            "{NAMENSRAUM_FAENGER}"
+        );
     }
 
     /// Ein Klick auf dem Menü wählt, jeder andere schliesst.

@@ -106,6 +106,23 @@ fn main() {
         // auf stdout kommt die gewählte Aktion. Siehe `popup`.
         #[cfg(target_os = "linux")]
         Some("--menue") => popup::als_prozess(),
+
+        // Auch nicht in der Hilfe, und auch kein Zufall: Dieser Aufruf malt
+        // die Menuekarte in eine Bilddatei, ohne Compositor und ohne Leiste.
+        //
+        //   ai-brain-tray --menue-bild /tmp/menue.ppm < menue.json
+        //
+        // Gebraucht, weil „sieht es aus wie Omarchys Menue?" eine Frage an
+        // ein BILD ist und sonst niemand sie beantworten kann: Auf der
+        // codingmachine haengt `grim` (Screencopy ist dort gesperrt), auf
+        // einem CI-Laeufer gibt es gar keine Sitzung. Hier kommt genau der
+        // Puffer heraus, den das Fenster zeigt — dieselbe Rechnung, dieselben
+        // Themefarben, dieselbe Schrift.
+        //
+        // PPM (P6), weil es ohne eine einzige weitere Kiste zu schreiben ist;
+        // `magick bild.ppm bild.png` macht daraus, was ein Mensch ansieht.
+        #[cfg(target_os = "linux")]
+        Some("--menue-bild") => popup::als_bild(args.get(1).map(String::as_str)),
         Some("--help") | Some("-h") => {
             print!("{HILFE}");
             Ok(())

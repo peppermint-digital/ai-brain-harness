@@ -45,6 +45,9 @@ pub struct Kasten {
 }
 
 /// Der gerechnete Aufbau: Kasten, Zeilen, Trefferflächen.
+///
+/// Alle Masse in diesem Struct sind **Gerätepixel**; die Umrechnung nach
+/// aussen macht [`Aufbau::logisch`].
 pub struct Aufbau {
     /// Der Kasten in Gerätepixeln, Ursprung ist die linke obere Ecke der
     /// Ausgabe.
@@ -58,7 +61,45 @@ pub struct Aufbau {
     polster: f32,
     rahmen: f32,
     radius: f32,
+    /// Radius der Hover-Fläche: `max(2, radius)` wie in `Tray.qml`.
+    hover_radius: f32,
     haken_spalte: f32,
+    /// Wo der Text beginnt, vom Inhaltsrand — `Style.space(28)`.
+    text_einzug: f32,
+    /// Einzug des Trennstrichs vom Inhaltsrand — `Style.space(10)`.
+    trenner_einzug: f32,
+}
+
+/// Wo das Menü hängt.
+///
+/// ## Warum nicht mehr an der Mausspitze (v0.5.6)
+///
+/// Bis v0.5.5 setzte sich der Kasten an den Zeiger, mit 6 Pixel Luft und
+/// einer Drehung zum Bildschirmrand hin. Das funktionierte, sah aber nicht
+/// aus wie Omarchy: Dessen `PopupCard` richtet sich am **Symbol** aus, nicht
+/// an der Maus — `localX = target.width / 2 - popupWidth / 2`,
+/// `localY = target.height + margin`. Die Karte hängt also waagerecht
+/// mittig unter ihrem Symbol und senkrecht unter der **Leiste**, immer auf
+/// derselben Höhe, egal wo in der Leiste der Zeiger genau stand.
+///
+/// Das ist der sichtbarste Unterschied von allen: Ein Menü, dessen Oberkante
+/// bei jedem Klick ein paar Pixel wandert, liest sich als fremdes Fenster,
+/// auch wenn Farben und Schrift stimmen.
+#[derive(Clone, Copy, Debug)]
+pub struct Anker {
+    /// Die Mausstelle, **ausgabelokal und logisch**. Waagerecht ist sie die
+    /// beste Auskunft über die Mitte des Symbols, die ein Wayland-Client hat:
+    /// Der Klick hat das Symbol getroffen, und ein Symbolplatz ist in
+    /// Omarchys Leiste `Style.bar.iconSlot` (27 Pixel) breit — die
+    /// Abweichung zur echten Mitte ist damit höchstens ein halber Platz.
+    pub maus_x: f64,
+    pub maus_y: f64,
+    /// Die Leiste, in der der Klick landete — ausgabelokal, logisch.
+    ///
+    /// `None` heisst: Wir wissen nicht, wo die Leiste liegt (kein Hyprland,
+    /// oder der Aufruf kam nicht aus einem Klick). Dann bleibt es beim
+    /// Verhalten aus v0.5.5, also am Zeiger.
+    pub leiste: Option<super::hyprland::Flaeche>,
 }
 
 /// Die weiteste Beschriftung darf den Schirm nicht sprengen.
@@ -69,24 +110,18 @@ pub struct Aufbau {
 /// weil ein Menü, das über den halben Schirm läuft, kein Menü mehr ist.
 const BREITE_MAX_LOGISCH: f32 = 460.0;
 
-/// Abstand zur Maus und zum Bildschirmrand, logisch.
-const LUFT_LOGISCH: f32 = 6.0;
-
 impl Aufbau {
-    /// Rechnet den Kasten für `eintraege` an der Mausstelle
-    /// `(maus_x, maus_y)` auf einer Fläche von `flaeche_breite` ×
-    /// `flaeche_hoehe` — **alle vier logisch**.
+    /// Rechnet den Kasten für `eintraege` an `anker` auf einer Fläche von
+    /// `flaeche_breite` × `flaeche_hoehe` — **beide logisch**.
     ///
     /// `schrift` muss in Gerätepixeln geladen sein (also mit
     /// `stil.schriftgrad * skalierung`); hier wird nur noch vermessen.
-    #[allow(clippy::too_many_arguments)]
     pub fn rechnen(
         eintraege: &[Eintrag],
         stil: &Stil,
         schrift: &mut Schrift,
         skalierung: f32,
-        maus_x: f64,
-        maus_y: f64,
+        anker: Anker,
         flaeche_breite: i32,
         flaeche_hoehe: i32,
     ) -> Self {
@@ -95,12 +130,29 @@ impl Aufbau {
         let polster = s(stil.polster);
         let rahmen = s(stil.rahmenbreite);
         let zeilenhoehe = s(stil.zeilenhoehe).max(8.0);
-        let infohoehe = s(stil.zeilenhoehe * 0.78).max(8.0);
-        let trennerhoehe = s(9.0).max(3.0);
+        let infohoehe = s(stil.infohoehe).max(8.0);
+        let trennerhoehe = s(stil.trennerhoehe).max(3.0);
         let radius = s(stil.radius);
-        let haken_spalte = s(stil.schriftgrad * 1.6);
+        let hover_radius = s(stil.hover_radius);
+        let haken_spalte = s(stil.haken_spalte);
+        let text_einzug = s(stil.text_einzug);
+        let trenner_einzug = s(stil.trenner_einzug);
+        let rand = s(stil.rand);
 
-        // Breite: die weiteste Beschriftung plus Häkchenspalte und Luft.
+        // ## Die Breite
+        //
+        // Omarchys Tray-Menü ist **fest** `Style.space(232)` breit und kürzt
+        // jede längere Zeile mit `elide: Text.ElideRight`. Das ist für ein
+        // Menü richtig, dessen Punkte „Settings", „Quit" heissen — und für
+        // unseres falsch: „Leitung aufräumen (Prozess läuft ohne Schalter)"
+        // und die Verbindungszeile sind länger, und abgeschnitten sagen sie
+        // nichts mehr.
+        //
+        // Deshalb ist 232 hier die **Mindest**breite, nicht die Breite: Ein
+        // kurzes Menü sieht damit genau aus wie Omarchys, ein langes wird
+        // breiter statt unlesbar. Das ist der einzige Punkt, an dem dieses
+        // Fenster bewusst von der Vorlage abweicht — und der Grund steht hier,
+        // damit niemand ihn für ein Versehen hält und „korrigiert".
         let mut text_breite: f32 = 0.0;
 
         for e in eintraege {
@@ -115,10 +167,11 @@ impl Aufbau {
         // `kuerzen` macht daraus ein „…". Gemessen am 28.10.2026: „Verbunden
         // mit AI Brain (laptop)" kam als „Verbunden mit AI Brain (lapto…"
         // heraus, obwohl genau diese Zeile die Breite bestimmt hatte.
-        let breite = (text_breite + haken_spalte + 2.0 * polster + 2.0 * rahmen + 1.0)
+        let breite = (text_breite + text_einzug + 2.0 * (polster + rahmen) + 1.0)
             .ceil()
+            .max(s(stil.breite_soll))
             .min(s(BREITE_MAX_LOGISCH))
-            .max(s(160.0));
+            .min((flaeche_breite as f32 * skalierung - 2.0 * rand).max(s(120.0)));
 
         // Höhe: Zeile für Zeile aufsummieren, und dabei gleich festhalten, wo
         // jede sitzt. Zwei Durchläufe über dieselbe Liste wären zwei
@@ -139,47 +192,102 @@ impl Aufbau {
 
         let hoehe = (lauf + polster + rahmen).round();
 
-        // ## Wohin der Kasten kommt
-        //
-        // Unter den Mauszeiger, denn dort ist das Symbol — und in der Leiste
-        // heisst das: direkt unter die Leiste.
-        //
-        // Waagerecht wird er an der Maus ausgerichtet, aber zum
-        // **Bildschirmrand hin** gedreht: Steht das Symbol rechts — und
-        // Tray-Symbole stehen rechts —, läuft ein linksbündiger Kasten über
-        // den Rand hinaus. Deshalb rechte Kante an die Maus, wenn die Maus in
-        // der rechten Hälfte steht.
-        let luft = s(LUFT_LOGISCH);
         let flaeche_breite_dev = (flaeche_breite as f32 * skalierung).round();
         let flaeche_hoehe_dev = (flaeche_hoehe as f32 * skalierung).round();
-        let maus_x_dev = (maus_x as f32 * skalierung).round();
-        let maus_y_dev = (maus_y as f32 * skalierung).round();
+        let maus_x_dev = (anker.maus_x as f32 * skalierung).round();
+        let maus_y_dev = (anker.maus_y as f32 * skalierung).round();
 
-        let mut x = if maus_x_dev > flaeche_breite_dev / 2.0 {
-            maus_x_dev - breite + s(12.0)
-        } else {
-            maus_x_dev - s(12.0)
+        let (mut x, mut y) = match anker.leiste {
+            // ## Der Normalfall: an der Leiste
+            //
+            // Genau die Rechnung aus `PopupCard.onAnchoring`, nur mit der
+            // Leiste statt mit dem Symbolknopf — die Symbolbreite kennt ein
+            // Wayland-Client nicht, die Leistenhöhe über `hyprctl layers`
+            // schon.
+            Some(l) => {
+                let lx = (l.x as f32 * skalierung).round();
+                let ly = (l.y as f32 * skalierung).round();
+                let lb = (l.breite as f32 * skalierung).round();
+                let lh = (l.hoehe as f32 * skalierung).round();
+
+                // Waagerecht oder senkrecht? Omarchy fragt `bar.position`;
+                // wir sehen nur die Fläche, und eine Leiste ist in ihrer
+                // Hauptrichtung immer deutlich länger. Bei gleichen Massen
+                // (eine quadratische „Leiste" gibt es nicht) zählt sie als
+                // waagerecht.
+                if lb >= lh {
+                    // Oben oder unten? Entscheidend ist, an welcher Kante sie
+                    // klebt, nicht wo ihre Mitte liegt: Eine hohe Leiste am
+                    // oberen Rand hat ihre Mitte eventuell über der
+                    // Schirmmitte, hängt aber weiter oben.
+                    let unten = ly + lh / 2.0 > flaeche_hoehe_dev / 2.0;
+
+                    let y = if unten {
+                        ly - hoehe - rand
+                    } else {
+                        ly + lh + rand
+                    };
+
+                    // Mittig unters Symbol, und in die Leiste hinein geklemmt
+                    // — `PopupCard` klemmt auf `[margin, window.width -
+                    // popupWidth - margin]` des Leistenfensters.
+                    let x = (maus_x_dev - breite / 2.0)
+                        .clamp(lx + rand, (lx + lb - breite - rand).max(lx + rand));
+
+                    (x, y)
+                } else {
+                    let rechts = lx + lb / 2.0 > flaeche_breite_dev / 2.0;
+
+                    let x = if rechts {
+                        lx - breite - rand
+                    } else {
+                        lx + lb + rand
+                    };
+
+                    let y = (maus_y_dev - hoehe / 2.0)
+                        .clamp(ly + rand, (ly + lh - hoehe - rand).max(ly + rand));
+
+                    (x, y)
+                }
+            }
+
+            // ## Der Rückfall: an der Maus, wie bis v0.5.5
+            //
+            // Waagerecht wird der Kasten an der Maus ausgerichtet, aber zum
+            // **Bildschirmrand hin** gedreht: Steht das Symbol rechts — und
+            // Tray-Symbole stehen rechts —, läuft ein linksbündiger Kasten
+            // über den Rand hinaus.
+            None => {
+                let x = if maus_x_dev > flaeche_breite_dev / 2.0 {
+                    maus_x_dev - breite + s(12.0)
+                } else {
+                    maus_x_dev - s(12.0)
+                };
+
+                let mut y = maus_y_dev + rand;
+
+                // Senkrecht kippen, wenn unten kein Platz ist — bei einer
+                // Leiste am unteren Bildschirmrand ist das der Normalfall,
+                // nicht die Ausnahme.
+                if y + hoehe > flaeche_hoehe_dev - rand {
+                    let oben = maus_y_dev - rand - hoehe;
+
+                    y = if oben >= rand {
+                        oben
+                    } else {
+                        // Weder unten noch oben Platz: an den Rand, lieber
+                        // verschoben als abgeschnitten.
+                        (flaeche_hoehe_dev - hoehe - rand).max(rand)
+                    };
+                }
+
+                (x, y)
+            }
         };
 
-        let mut y = maus_y_dev + luft;
-
-        // Senkrecht kippen, wenn unten kein Platz ist — bei einer Leiste am
-        // unteren Bildschirmrand ist das der Normalfall, nicht die Ausnahme.
-        if y + hoehe > flaeche_hoehe_dev - luft {
-            let oben = maus_y_dev - luft - hoehe;
-
-            y = if oben >= luft {
-                oben
-            } else {
-                // Weder unten noch oben Platz: an den Rand, lieber verschoben
-                // als abgeschnitten.
-                (flaeche_hoehe_dev - hoehe - luft).max(luft)
-            };
-        }
-
         // Und in jedem Fall in die Fläche hinein.
-        x = x.clamp(luft, (flaeche_breite_dev - breite - luft).max(luft));
-        y = y.clamp(luft, (flaeche_hoehe_dev - hoehe - luft).max(luft));
+        x = x.clamp(rand, (flaeche_breite_dev - breite - rand).max(rand));
+        y = y.clamp(rand, (flaeche_hoehe_dev - hoehe - rand).max(rand));
 
         Self {
             kasten: Kasten {
@@ -195,7 +303,10 @@ impl Aufbau {
             polster,
             rahmen,
             radius,
+            hover_radius,
             haken_spalte,
+            text_einzug,
+            trenner_einzug,
         }
     }
 
@@ -362,14 +473,34 @@ impl Aufbau {
             }
         }
 
+        // ## Der Inhaltsbereich
+        //
+        // Omarchys Zeilen liegen im `contentItem` der Karte, also zwischen
+        // Rahmen und Polster — `anchors.fill: parent` einer Zeile reicht von
+        // dort bis dort. Jede waagerechte Zahl unten zählt von `inhalt_links`,
+        // genau wie `anchors.leftMargin` in `Tray.qml`.
+        let inhalt_links = (self.rahmen + self.polster).round() as i32;
+        let inhalt_rechts = breite - inhalt_links;
+
         for (i, oben, zeilenhoehe) in &self.zeilen {
             let eintrag = &eintraege[*i];
 
+            // ## Der Trennstrich
+            //
+            // In Omarchy ist das eine Zeile von `Style.space(11)`, in deren
+            // senkrechter Mitte ein 1 Pixel hohes Rechteck liegt, links und
+            // rechts um `Style.space(10)` eingerückt, in `Color.popups.border`
+            // bei `opacity: 0.45`.
+            //
+            // Ein Pixel heisst dabei ein **logisches** — auf einem skalierten
+            // Schirm also `skalierung` Gerätepixel. Mit festem 1 wäre der
+            // Strich bei Skalierung 2 halb so dick wie Omarchys und sähe aus
+            // wie ein Darstellungsfehler.
             if let Eintrag::Trenner = eintrag {
-                let y = oben + zeilenhoehe / 2;
-                let x0 = (self.rahmen + self.polster / 2.0).round() as i32;
-                let x1 = breite - x0;
-                let dicke = self.rahmen.max(1.0) as i32;
+                let dicke = self.skalierung.round().max(1.0) as i32;
+                let y = oben + (*zeilenhoehe - dicke) / 2;
+                let x0 = inhalt_links + self.trenner_einzug.round() as i32;
+                let x1 = inhalt_rechts - self.trenner_einzug.round() as i32;
 
                 for yy in y..y + dicke {
                     for xx in x0..x1 {
@@ -382,14 +513,29 @@ impl Aufbau {
 
             let hervor = unter_maus == Some(*i);
 
+            // ## Die Hervorhebung
+            //
+            // `Rectangle { anchors.fill: parent; radius: max(2, cornerRadius) }`
+            // in `Style.hoverFillFor(fg, fg)`. Zwei Dinge daran sind anders
+            // als bis v0.5.5:
+            //
+            // * Sie geht über die **ganze** Inhaltsbreite. Vorher war sie um
+            //   ein Drittel des Polsters eingerückt — ein Einzug, den Omarchy
+            //   nicht hat.
+            // * Ihr Radius ist `max(2, radius)` und nicht die Hälfte des
+            //   Kartenradius. Bei `decoration:rounding = 0` (so auf diesem
+            //   Rechner) ist Omarchys Zeile also **leicht** gerundet, obwohl
+            //   die Karte eckig ist.
             if hervor {
-                let x0 = (self.rahmen + self.polster / 3.0).round() as i32;
-                let x1 = breite - x0;
-                let ecke = (self.radius / 2.0).min(*zeilenhoehe as f32 / 2.0);
-
                 for yy in *oben..oben + zeilenhoehe {
-                    for xx in x0..x1 {
-                        let d = deckung_ecke(xx - x0, yy - oben, x1 - x0, *zeilenhoehe, ecke);
+                    for xx in inhalt_links..inhalt_rechts {
+                        let d = deckung_ecke(
+                            xx - inhalt_links,
+                            yy - oben,
+                            inhalt_rechts - inhalt_links,
+                            *zeilenhoehe,
+                            self.hover_radius,
+                        );
 
                         if d > 0.0 {
                             mischen(puffer, breite, hoehe, xx, yy, self.stil.auswahl, d);
@@ -398,20 +544,28 @@ impl Aufbau {
                 }
             }
 
+            // ## Die Textfarbe
+            //
+            // In Omarchy gibt es nur **eine**: `color: root.foreground`. Was
+            // einen Zustand zeigt, ist die Deckung der ganzen Zeile
+            // (`opacity: modelData.enabled ? 1.0 : 0.45`) — nicht ein anderer
+            // Ton. Bis v0.5.5 wurde die überfahrene Zeile blau
+            // (`menu.selected-text`); das ist die Farbe der **Auswahl** im
+            // Startmenü, ein anderer Zustand, und im Tray-Menü sitzt sie
+            // falsch.
             let farbe = match eintrag {
                 Eintrag::Zeile(_) => self.stil.text_matt,
-                _ if !eintrag.klickbar() => self.stil.text_matt,
-                _ if hervor => self.stil.auswahl_text,
+                _ if !eintrag.klickbar() => self.stil.text.blasser(self.stil.matt),
                 _ => self.stil.text,
             };
 
-            let text_x = self.rahmen + self.polster + self.haken_spalte;
+            let text_x = inhalt_links as f32 + self.text_einzug;
             let grundlinie = schrift.grundlinie(*oben as f32, *zeilenhoehe as f32);
 
             if let Some(t) = eintrag.text() {
                 // Zu lange Beschriftungen abschneiden, statt über den Rahmen
                 // zu malen.
-                let platz = breite as f32 - 2.0 * (self.rahmen + self.polster) - self.haken_spalte;
+                let platz = inhalt_rechts as f32 - text_x;
                 let t = kuerzen(t, platz, schrift);
 
                 schrift.schreiben(&t, text_x, grundlinie, |x, y, d| {
@@ -419,30 +573,56 @@ impl Aufbau {
                 });
             }
 
-            // Das Häkchen in die Spalte links vom Text.
+            // ## Das Häkchen
+            //
+            // Omarchy setzt es als Zeichen in eine `Style.space(22)` breite,
+            // mittig ausgerichtete Spalte am linken Rand der Zeile — dasselbe
+            // Zeichen, das in jedem anderen Menü der Leiste steht. Hat die
+            // Schrift es, nehmen wir es; hat sie es nicht, zeichnen wir zwei
+            // Striche. Warum nicht einfach immer zeichnen: Ein selbstgemaltes
+            // Häkchen neben einem gesetzten ist genau der Unterschied, den
+            // dieses Release wegmachen soll. Warum nicht einfach immer setzen:
+            // siehe `Schrift::hat_zeichen`.
             if let Eintrag::Haken { gesetzt: true, .. } = eintrag {
-                let mitte_x = self.rahmen + self.polster + self.haken_spalte / 2.0;
-                let mitte_y = *oben as f32 + *zeilenhoehe as f32 / 2.0;
                 let farbe = if eintrag.klickbar() {
-                    self.stil.akzent
+                    self.stil.text
                 } else {
-                    self.stil.text_matt
+                    self.stil.text.blasser(self.stil.matt)
                 };
 
-                haken(
-                    puffer,
-                    breite,
-                    hoehe,
-                    mitte_x,
-                    mitte_y,
-                    self.grad * 0.62,
-                    (self.grad / 7.0).max(1.4),
-                    farbe,
-                );
+                let mitte_x = inhalt_links as f32 + self.haken_spalte / 2.0;
+                let mitte_y = *oben as f32 + *zeilenhoehe as f32 / 2.0;
+
+                if schrift.hat_zeichen(HAKEN) {
+                    let zeichen = HAKEN.to_string();
+                    let x = mitte_x - schrift.breite(&zeichen) / 2.0;
+
+                    schrift.schreiben(&zeichen, x, grundlinie, |px, py, d| {
+                        mischen(puffer, breite, hoehe, px, py, farbe, d as f32 / 255.0);
+                    });
+                } else {
+                    haken(
+                        puffer,
+                        breite,
+                        hoehe,
+                        mitte_x,
+                        mitte_y,
+                        self.grad * 0.62,
+                        (self.grad / 7.0).max(1.4),
+                        farbe,
+                    );
+                }
             }
         }
     }
 }
+
+/// Das Häkchen, wie Omarchys Tray-Menü es setzt: U+F00C aus dem
+/// Nerd-Font-Bereich (`Tray.qml`: `text: … ? "\uf00c" : ""`).
+///
+/// Ein privater Codepunkt, also keine Zusage irgendeiner Norm — darum fragt
+/// [`Schrift::hat_zeichen`] vorher nach, statt ein leeres Kästchen zu malen.
+pub const HAKEN: char = '\u{f00c}';
 
 /// Text so weit kürzen, dass er in `platz` Gerätepixel passt.
 ///
@@ -647,6 +827,7 @@ fn mischen(
 mod tests {
     use super::*;
     use crate::menue::Aktion;
+    use crate::popup::hyprland::Flaeche;
 
     fn eintraege() -> Vec<Eintrag> {
         vec![
@@ -685,6 +866,7 @@ mod tests {
         Schrift::laden(Stil::default().schriftgrad * skalierung).ok()
     }
 
+    /// Der Aufbau am Zeiger — der Rückfallweg, ohne bekannte Leiste.
     fn aufbau(
         liste: &[Eintrag],
         s: &mut Schrift,
@@ -692,16 +874,345 @@ mod tests {
         maus: (f64, f64),
         flaeche: (i32, i32),
     ) -> Aufbau {
+        aufbau_mit(liste, s, skalierung, maus, None, flaeche)
+    }
+
+    fn aufbau_mit(
+        liste: &[Eintrag],
+        s: &mut Schrift,
+        skalierung: f32,
+        maus: (f64, f64),
+        leiste: Option<Flaeche>,
+        flaeche: (i32, i32),
+    ) -> Aufbau {
         Aufbau::rechnen(
             liste,
             &Stil::default(),
             s,
             skalierung,
-            maus.0,
-            maus.1,
+            Anker {
+                maus_x: maus.0,
+                maus_y: maus.1,
+                leiste,
+            },
             flaeche.0,
             flaeche.1,
         )
+    }
+
+    /// Die Leiste dieses Prüfrechners, ausgabelokal und logisch: oben,
+    /// 3072 breit, 26 hoch (`hyprctl layers`, Namensraum `omarchy-bar`).
+    const LEISTE_OBEN: Flaeche = Flaeche {
+        x: 0.0,
+        y: 0.0,
+        breite: 3072.0,
+        hoehe: 26.0,
+    };
+
+    /// Das Menü hängt unter der Leiste und mittig unter seinem Symbol.
+    ///
+    /// Das sind die zwei Zahlen aus `PopupCard.onAnchoring`:
+    /// `localY = target.height + margin` und
+    /// `localX = target.width / 2 - popupWidth / 2`. Gemessen an der echten
+    /// Leiste dieses Rechners (26 Pixel hoch) und `gaps_out = 10`, also
+    /// `Style.gapsOut = 5`.
+    #[test]
+    fn das_menue_haengt_unter_der_leiste_und_mittig_unter_dem_symbol() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let a = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (2400.0, 13.0),
+            Some(LEISTE_OBEN),
+            (3072, 2048),
+        );
+
+        let rand = Stil::default().rand as i32;
+
+        assert_eq!(
+            a.kasten.y,
+            LEISTE_OBEN.hoehe as i32 + rand,
+            "die Oberkante gehört direkt unter die Leiste"
+        );
+        assert_eq!(
+            a.kasten.x,
+            2400 - a.kasten.breite / 2,
+            "waagerecht mittig unter dem Symbol"
+        );
+    }
+
+    /// Wo in der Leiste der Zeiger senkrecht stand, darf die Höhe nicht
+    /// ändern.
+    ///
+    /// Das ist der sichtbarste Unterschied zu v0.5.5, und er fällt genau dann
+    /// auf, wenn man das Menü zweimal öffnet: Hing es am Zeiger, wanderte die
+    /// Oberkante um ein paar Pixel. Omarchys Karte tut das nie — sie hängt an
+    /// der Leiste, nicht an der Maus.
+    #[test]
+    fn die_hoehe_haengt_nicht_an_der_mausstelle() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let flaeche = (3072, 2048);
+
+        let oben = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (2400.0, 2.0),
+            Some(LEISTE_OBEN),
+            flaeche,
+        );
+        let unten = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (2400.0, 24.0),
+            Some(LEISTE_OBEN),
+            flaeche,
+        );
+
+        assert_eq!(oben.kasten.y, unten.kasten.y);
+        assert_eq!(oben.kasten.x, unten.kasten.x);
+    }
+
+    /// Eine Leiste am unteren Rand lässt das Menü nach oben aufklappen.
+    #[test]
+    fn eine_leiste_unten_laesst_das_menue_nach_oben_klappen() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let leiste = Flaeche {
+            x: 0.0,
+            y: 2022.0,
+            breite: 3072.0,
+            hoehe: 26.0,
+        };
+
+        let a = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (2400.0, 2035.0),
+            Some(leiste),
+            (3072, 2048),
+        );
+
+        let rand = Stil::default().rand as i32;
+
+        assert_eq!(
+            a.kasten.y + a.kasten.hoehe,
+            leiste.y as i32 - rand,
+            "die Unterkante gehört direkt über die Leiste"
+        );
+    }
+
+    /// Eine senkrechte Leiste links schiebt das Menü nach rechts, und
+    /// senkrecht wird es an der Maus mittig gesetzt.
+    #[test]
+    fn eine_senkrechte_leiste_schiebt_das_menue_zur_seite() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let leiste = Flaeche {
+            x: 0.0,
+            y: 0.0,
+            breite: 28.0,
+            hoehe: 2048.0,
+        };
+
+        let a = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (14.0, 1000.0),
+            Some(leiste),
+            (3072, 2048),
+        );
+
+        let rand = Stil::default().rand as i32;
+
+        assert_eq!(a.kasten.x, leiste.breite as i32 + rand);
+        assert_eq!(a.kasten.y, 1000 - a.kasten.hoehe / 2);
+    }
+
+    /// Steht das Symbol am rechten Ende der Leiste, bleibt das Menü drin.
+    ///
+    /// `PopupCard` klemmt auf `[margin, window.width - popupWidth - margin]`.
+    /// Ohne diese Klemme hinge die Karte eines Symbols am rechten Rand zur
+    /// Hälfte neben dem Schirm — und Tray-Symbole stehen rechts.
+    #[test]
+    fn am_rechten_ende_der_leiste_bleibt_das_menue_drin() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let a = aufbau_mit(
+            &liste,
+            &mut s,
+            1.0,
+            (3060.0, 13.0),
+            Some(LEISTE_OBEN),
+            (3072, 2048),
+        );
+
+        let rand = Stil::default().rand as i32;
+
+        assert_eq!(a.kasten.x + a.kasten.breite, 3072 - rand);
+        assert!(a.kasten.x >= rand);
+    }
+
+    /// Ein kurzes Menü ist genau so breit wie Omarchys: `Style.space(232)`.
+    ///
+    /// Und ein langes wird breiter statt unlesbar — die eine bewusste
+    /// Abweichung von der Vorlage, siehe `Aufbau::rechnen`.
+    #[test]
+    fn ein_kurzes_menue_hat_omarchys_breite_ein_langes_waechst() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let kurz = vec![
+            Eintrag::Punkt {
+                text: "Beenden".into(),
+                aktiv: true,
+                aktion: Aktion::Beenden,
+            },
+            Eintrag::Trenner,
+            Eintrag::Punkt {
+                text: "Mehr".into(),
+                aktiv: true,
+                aktion: Aktion::Brain,
+            },
+        ];
+
+        let a = aufbau(&kurz, &mut s, 1.0, (700.0, 20.0), (1920, 1080));
+
+        assert_eq!(
+            a.kasten.breite,
+            Stil::default().breite_soll as i32,
+            "ein kurzes Menü muss Omarchys 232 haben, nicht weniger"
+        );
+
+        let lang = vec![Eintrag::Punkt {
+            text: "Leitung aufräumen (Prozess läuft ohne Schalter)".into(),
+            aktiv: true,
+            aktion: Aktion::Aus,
+        }];
+
+        let b = aufbau(&lang, &mut s, 1.0, (700.0, 20.0), (1920, 1080));
+
+        assert!(
+            b.kasten.breite > a.kasten.breite,
+            "die lange Zeile muss den Kasten breiter machen ({} vs {})",
+            b.kasten.breite,
+            a.kasten.breite
+        );
+    }
+
+    /// Die Hervorhebung geht über die **ganze** Zeile, von Inhaltsrand zu
+    /// Inhaltsrand — `anchors.fill: parent` in `Tray.qml`.
+    ///
+    /// Bis v0.5.5 war sie um ein Drittel des Polsters eingerückt. Das ist der
+    /// Unterschied, der ein Menü nebeneinandergelegt sofort verrät.
+    #[test]
+    fn die_hervorhebung_geht_ueber_die_ganze_zeile() {
+        let Some(mut s) = schrift(1.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let a = aufbau(&liste, &mut s, 1.0, (700.0, 20.0), (1920, 1080));
+
+        let mut ohne = vec![0u32; a.pixel()];
+        a.malen(&mut ohne, &liste, &mut s, None);
+
+        let mut mit = vec![0u32; a.pixel()];
+        a.malen(&mut mit, &liste, &mut s, Some(4));
+
+        let (_, oben, hoehe) = *a.zeilen.iter().find(|(i, _, _)| *i == 4).expect("Zeile");
+
+        let inhalt_links = (a.rahmen + a.polster).round() as i32;
+        let inhalt_rechts = a.kasten.breite - inhalt_links;
+
+        // In der senkrechten Mitte der Zeile ist die Hervorhebung auch bei
+        // gerundeten Ecken auf voller Breite da.
+        let y = oben + hoehe / 2;
+        let zeile = |x: i32| {
+            let i = (y * a.kasten.breite + x) as usize;
+            mit[i] != ohne[i]
+        };
+
+        assert!(zeile(inhalt_links), "die linke Kante fehlt");
+        assert!(zeile(inhalt_rechts - 1), "die rechte Kante fehlt");
+        assert!(
+            !zeile(inhalt_links - 1),
+            "die Hervorhebung läuft ins Polster"
+        );
+    }
+
+    /// Der Trennstrich sitzt eingerückt und ist genau ein logisches Pixel
+    /// dick.
+    ///
+    /// `Style.space(10)` links und rechts, `height: 1` — auf einem
+    /// skalierten Schirm also `skalierung` Gerätepixel, nicht eins.
+    ///
+    /// Gemessen bei Skalierung 2, weil dort eindeutig ist, was herauskommen
+    /// muss: Bei 1.25 rundet ein logisches Pixel auf eins, und die Probe
+    /// könnte ein festes 1 nicht von der Umrechnung unterscheiden.
+    #[test]
+    fn der_trennstrich_sitzt_eingeruckt_und_ist_ein_logisches_pixel() {
+        let Some(mut s) = schrift(2.0) else {
+            return;
+        };
+
+        let liste = eintraege();
+        let a = aufbau(&liste, &mut s, 2.0, (700.0, 20.0), (1920, 1080));
+
+        let mut puffer = vec![0u32; a.pixel()];
+        a.malen(&mut puffer, &liste, &mut s, None);
+
+        // Eintrag 2 ist der erste Trenner.
+        assert!(matches!(liste[2], Eintrag::Trenner));
+        let (_, oben, hoehe) = *a.zeilen.iter().find(|(i, _, _)| *i == 2).expect("Zeile");
+
+        let inhalt_links = (a.rahmen + a.polster).round() as i32;
+        let x_strich = inhalt_links + a.trenner_einzug.round() as i32;
+
+        // Der Hintergrund dieser Zeile, zum Vergleich: ganz links, wo kein
+        // Strich sein darf.
+        let grund = puffer[((oben + hoehe / 2) * a.kasten.breite + inhalt_links) as usize];
+
+        let mut dicke = 0;
+
+        for y in oben..oben + hoehe {
+            if puffer[(y * a.kasten.breite + x_strich) as usize] != grund {
+                dicke += 1;
+            }
+        }
+
+        assert_eq!(dicke, 2, "1 logisches Pixel bei Skalierung 2 → 2 Geräte");
+
+        // Und im Einzug steht nichts.
+        for y in oben..oben + hoehe {
+            assert_eq!(
+                puffer[(y * a.kasten.breite + inhalt_links) as usize],
+                grund,
+                "der Trennstrich läuft in den Einzug"
+            );
+        }
     }
 
     /// Jeder klickbare Punkt wird in seiner eigenen Zeile getroffen.
@@ -1011,7 +1522,7 @@ mod tests {
                 aktion: Aktion::Umschalten,
             }];
 
-            let a = Aufbau::rechnen(&liste, &Stil::default(), s, 1.0, 300.0, 20.0, 1920, 1080);
+            let a = aufbau(&liste, s, 1.0, (300.0, 20.0), (1920, 1080));
 
             let mut puffer = vec![0u32; a.pixel()];
             a.malen(&mut puffer, &liste, s, None);

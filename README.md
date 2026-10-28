@@ -1127,11 +1127,73 @@ sehen müssten — die Fläche *ist* der Zustand:
 3. Klick irgendwo daneben → derselbe Weg, auf jedem Schirm.
 
 Gezeichnet wird in reinem Rust: `wayland-client` ohne `libwayland`,
-`fontdue` für die Buchstaben, kein GTK, kein `libxkbcommon`. Die Farben kommen
-aus dem laufenden Omarchy-Theme (`shell.toml`, Abschnitte `[popups]`,
-`[menu]`, `[font]`, `[spacing]`), die Schrift aus `fc-match monospace` —
-dieselbe Frage, die auch die Leiste stellt. Ohne Theme gilt eine dunkle
-Vorgabe.
+`fontdue` für die Buchstaben, kein GTK, kein `libxkbcommon`.
+
+#### Es sieht aus wie Omarchys Menü, weil es dieselben Zahlen liest (v0.5.6)
+
+Bis v0.5.5 nahm das Fenster *ungefähr* die Farben des Themes und sonst eigene
+Masse. Seit v0.5.6 liest es die Zahlen, die Omarchys Tray-Menü selbst
+benutzt — abgelesen an `Ui/PopupCard.qml` und `plugins/bar/widgets/Tray.qml`:
+
+| Stelle | Woher |
+|---|---|
+| Polster der Karte | `Style.space(8)` |
+| Rahmen | **Vordergrund bei 0.45**, Breite `max(1, space(2))` |
+| Radius | Hyprlands `decoration:rounding` — auf einer Vorgabe-Installation **0** |
+| Zeilenhöhe | `Style.space(30)` |
+| Hover | `[controls] hover-cursor-color` bei `hover-cursor-fill-alpha` (0.08), über die **ganze** Zeile, Radius `max(2, radius)` |
+| Trenner | 1 px, eingerückt `space(10)`, `popups.border` bei 0.45 |
+| Häkchen | Spalte `space(22)`, Zeichen U+F00C, Text ab `space(28)` |
+| Schrift | `Style.font.bodySmall` = `round(base-size × 0.917)`, Familie aus `fc-match monospace` |
+| Ausgegraut | die ganze Zeile auf 0.45 |
+| Abstand zur Leiste | `general:gaps_out / 2` (Omarchys `Style.gapsOut`) |
+
+Gelesen wird **erst** `<theme>/shell.toml`, **dann**
+`~/.config/omarchy/shell.toml` darüber — dort schreibt
+`omarchy display text size` seine `[font] base-size`, und daran hängt die
+ganze Grössenrechnung (`space(px) = round(px × scale × base-size/12)`).
+
+Drei Dinge, die beim Nachbauen überraschen und in `tray/src/popup/farben.rs`
+begründet stehen:
+
+- Der Rahmen ist **nicht** `popups.border` (im Theme oft ein deckendes Blau).
+  Das Tray-Menü überschreibt ihn ausdrücklich mit dem Vordergrund bei 0.45.
+- `[spacing] popup-row-height` und `popup-padding` wirken **nicht**: Omarchys
+  Tray-Menü setzt beides als Literal und liest die Token nicht.
+- Eine überfahrene Zeile wechselt **nicht** die Textfarbe. Was den Zustand
+  zeigt, ist allein die Fläche darunter.
+
+**Die Lage ist die von Omarchys Popup**, nicht die der Maus: mittig unter dem
+Symbol, direkt unter der Leiste, in die Leiste hinein geklemmt. Welche Fläche
+die Leiste ist, sagt `hyprctl layers` — genommen wird die oberste, die den
+Klick enthält und *dünn* ist (höchstens die halbe Ausgabe in einer Richtung).
+Ohne die Dünn-Regel gewinnt der bildschirmgrosse Hintergrund, und der Kasten
+landet unten am Rand; genau so ist es am 28.10.2026 gemessen worden.
+
+**Ein Themewechsel kommt von selbst mit.** Das Menü ist ein eigener Prozess,
+der bei jedem Klick neu startet und dabei das Theme liest — es gibt keinen
+Zustand, der veralten könnte, und deshalb auch keinen Wächter.
+
+Die eine bewusste Abweichung: Omarchys Karte ist **fest** `space(232)` breit
+und kürzt alles Längere mit „…". Hier ist 232 die *Mindest*breite — ein kurzes
+Menü sieht damit genauso aus, „Leitung aufräumen (Prozess läuft ohne
+Schalter)" bleibt aber lesbar.
+
+Ohne Theme (jeder Rechner, der nicht Omarchy ist) gilt eine dunkle Vorgabe mit
+denselben Massen.
+
+```bash
+# Die Karte als Bild, ohne Compositor und ohne Leiste — dieselbe Rechnung,
+# dieselben Themefarben, dieselbe Schrift:
+ai-brain-tray --menue-bild /tmp/menue.ppm < menue.json
+magick /tmp/menue.ppm /tmp/menue.png
+```
+
+Das gibt es, weil „sieht es aus wie Omarchys Menü?" eine Frage an ein Bild
+ist — und auf einem Rechner ohne Screencopy (codingmachine) oder ganz ohne
+Sitzung (CI) sonst niemand sie beantworten kann.
+`AI_BRAIN_TRAY_MENUE_SKALIERUNG` und `AI_BRAIN_TRAY_MENUE_HERVOR` stellen
+Skalierung und hervorgehobene Zeile ein.
 
 **Wo es das nicht gibt, bleibt alles wie vorher.** Der Tray sieht beim Start
 nach, ob `zwlr_layer_shell_v1` da ist; unter GNOME, KDE und X11 ist es das

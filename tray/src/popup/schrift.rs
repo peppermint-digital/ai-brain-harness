@@ -119,6 +119,29 @@ impl Schrift {
         text.chars().map(|c| self.zeichen(c).vorschub).sum()
     }
 
+    /// Hat diese Schrift das Zeichen — oder käme ein leeres Kästchen heraus?
+    ///
+    /// ## Wozu diese Frage überhaupt gestellt wird
+    ///
+    /// Omarchys Tray-Menü setzt das Häkchen als Zeichen: `""` aus dem
+    /// Nerd-Font-Bereich. Auf einer Omarchy-Installation steht dort
+    /// „JetBrainsMono Nerd Font", die es hat — und dann ist das **genau** das
+    /// Häkchen, das in jedem anderen Menü der Leiste steht.
+    ///
+    /// Auf einem Rechner ohne Nerd Font ist derselbe Codepunkt nicht belegt.
+    /// `fontdue` rastert dann das Ersatzzeichen, und das ist bei den meisten
+    /// Schriften ein **leeres Kästchen** — neben „Live-Leitung" liest sich
+    /// das wie ein nicht gesetztes Häkchen. Genau falsch, und still falsch.
+    ///
+    /// Deshalb wird gefragt, statt gehofft: Hat die Schrift das Zeichen,
+    /// kommt Omarchys Häkchen; hat sie es nicht, zeichnet `malen::haken` zwei
+    /// Striche. `lookup_glyph_index` gibt für ein unbelegtes Zeichen 0 zurück
+    /// — das ist in jeder TrueType-Schrift das `.notdef`-Zeichen, also
+    /// zugleich der Index, den man NICHT haben will.
+    pub fn hat_zeichen(&self, c: char) -> bool {
+        self.font.lookup_glyph_index(c) != 0
+    }
+
     /// Schreibt `text` mit der Grundlinie bei `grundlinie`, linke Kante bei
     /// `x`, und ruft für jedes Pixel `setzen(x, y, deckung)`.
     ///

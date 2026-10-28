@@ -76,6 +76,110 @@ pub fn als_prozess() -> Result<(), String> {
     Ok(())
 }
 
+/// Der Unterbefehl `--menue-bild`: Einträge von `stdin`, Bild in eine Datei.
+///
+/// ## Warum es das gibt
+///
+/// „Sieht unser Menü aus wie Omarchys?" ist eine Frage an ein **Bild**, und
+/// bis v0.5.6 gab es keinen Weg, dieses Bild zu bekommen, ohne an einem
+/// Schirm zu sitzen. Auf der codingmachine hängt `grim` (dort ist Screencopy
+/// gesperrt), auf einem CI-Läufer gibt es gar keine Sitzung — und beides
+/// heisst: Die Darstellung war die einzige Eigenschaft dieses Fensters, die
+/// niemand nachsehen konnte.
+///
+/// Hier kommt genau der Puffer heraus, den das Fenster zeigt: dieselbe
+/// [`malen::Aufbau::rechnen`]-Rechnung, dieselben Themefarben, dieselbe
+/// Schrift. Was dieser Weg **nicht** beantwortet, ist die Lage auf dem Schirm
+/// — die hängt an der Leiste und wird mit `hyprctl layers` gemessen.
+///
+/// Der Hintergrund des Kastens darf halbdurchsichtig sein
+/// (`popups.background-alpha`), ein PPM kennt aber kein Alpha. Deshalb wird
+/// gegen ein Schachbrett gelegt: So ist zu sehen, wo etwas durchscheint,
+/// statt es für einen Farbton zu halten.
+pub fn als_bild(pfad: Option<&str>) -> Result<(), String> {
+    let pfad = pfad.ok_or("Wohin? `--menue-bild <datei.ppm>`")?;
+
+    let mut hinein = String::new();
+
+    std::io::stdin()
+        .read_to_string(&mut hinein)
+        .map_err(|e| format!("Menü nicht von stdin lesbar: {e}"))?;
+
+    let eintraege: Vec<Eintrag> = serde_json::from_str(hinein.trim())
+        .map_err(|e| format!("Menü nicht lesbar ({e}). Erwartet wird die Liste aus `menue`."))?;
+
+    if eintraege.is_empty() {
+        return Err("Leeres Menü — da gäbe es nichts zu zeigen.".into());
+    }
+
+    // Die Skalierung über eine Variable, damit sich derselbe Kasten in
+    // Gerätegrösse eines skalierten Schirms ansehen lässt — dort fallen
+    // Rundungsfehler auf, die bei 1.0 nicht vorkommen.
+    let skalierung: f32 = std::env::var("AI_BRAIN_TRAY_MENUE_SKALIERUNG")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v: &f32| *v >= 0.5 && *v <= 4.0)
+        .unwrap_or(1.0);
+
+    // Die Zeile, auf der die Maus steht: ohne Angabe die erste klickbare,
+    // damit die Hervorhebung auf dem Bild zu sehen ist. `-1` lässt sie weg.
+    let hervor = std::env::var("AI_BRAIN_TRAY_MENUE_HERVOR")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .map_or_else(
+            || malen::Aufbau::erster_klickbarer(&eintraege, false),
+            |i| usize::try_from(i).ok(),
+        );
+
+    let stil = farben::Stil::aus_theme();
+    let mut schrift = schrift::Schrift::laden(stil.schriftgrad * skalierung)?;
+
+    let aufbau = malen::Aufbau::rechnen(
+        &eintraege,
+        &stil,
+        &mut schrift,
+        skalierung,
+        malen::Anker {
+            maus_x: 400.0,
+            maus_y: 13.0,
+            leiste: None,
+        },
+        1920,
+        1080,
+    );
+
+    let mut puffer = vec![0u32; aufbau.pixel()];
+    aufbau.malen(&mut puffer, &eintraege, &mut schrift, hervor);
+
+    let (breite, hoehe) = (aufbau.kasten.breite, aufbau.kasten.hoehe);
+    let mut ppm = format!("P6\n{breite} {hoehe}\n255\n").into_bytes();
+
+    for y in 0..hoehe {
+        for x in 0..breite {
+            let p = puffer[(y * breite + x) as usize];
+
+            // ARGB8888, vorgemultipliziert: Die Farbkanäle sind schon mit
+            // Alpha verrechnet, der Rest des Pixels gehört dem Untergrund.
+            let a = ((p >> 24) & 0xff) as u32;
+            let rest = 255 - a;
+
+            // Schachbrett, 8 Pixel: zwei gut unterscheidbare Graustufen.
+            let grund = if ((x / 8) + (y / 8)) % 2 == 0 { 96 } else { 64 };
+            let auf = |kanal: u32| (kanal + grund * rest / 255).min(255) as u8;
+
+            ppm.push(auf((p >> 16) & 0xff));
+            ppm.push(auf((p >> 8) & 0xff));
+            ppm.push(auf(p & 0xff));
+        }
+    }
+
+    std::fs::write(pfad, ppm).map_err(|e| format!("{pfad} nicht schreibbar: {e}"))?;
+
+    println!("{pfad}: {breite}×{hoehe} bei Skalierung {skalierung}");
+
+    Ok(())
+}
+
 /// Ein Faden, der den Prozess nach [`GEDULD`] beendet.
 ///
 /// `exit(0)` und nicht ein Signal an die Ereignisschleife: Dieser Prozess ist
