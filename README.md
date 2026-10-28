@@ -1139,6 +1139,35 @@ nicht, und dort öffnet weiter die Leiste das Menü (`ItemIsMenu = true`).
 `AI_BRAIN_TRAY_MENUE=eigen` bzw. `=leiste` legt es von Hand fest,
 `AI_BRAIN_TRAY_MENUE_LAUT=1` schreibt jedes Wayland-Ereignis nach stderr.
 
+#### Omarchy: das Symbol anpinnen, sonst fährt der Bereich ein
+
+Omarchys Leiste hält den Tray-Bereich **nur offen, solange der Zeiger darauf
+steht** (`Tray.qml`: `onHoveredChanged: root.expanded = hovered`, ohne
+Ausnahme). Wer auf ein Symbol klickt und die Maus ins Menü bewegt, sieht den
+Bereich hinter sich einfahren — bei jedem Tray-Programm gleich, auch bei
+Omarchys eigenem Menü.
+
+**Von unserer Seite ist daran nichts zu machen**, und diesmal ist der Satz
+belegt statt behauptet: Solange unser Menü offen ist, leitet Hyprland alle
+Zeigerereignisse auf unsere Fläche um — die Leiste sieht also keinen Hover
+mehr, ob wir sie überdecken oder nicht. Sie auszusparen würde ausserdem den
+Klick auf die Leiste als Weg zum Schliessen kosten.
+
+Die Einstellung dafür hat Omarchy selbst: **Rechtsklick auf den kleinen Pfeil
+links neben den Tray-Symbolen** öffnet eine Liste aller Tray-Programme, jedes
+mit *Pin* und *Hide*. Ein angepinntes Symbol steht dauerhaft ausserhalb des
+einfahrenden Bereichs.
+
+In der Datei sieht das danach so aus (`~/.config/omarchy/shell.json`, unter
+`bar.layout.right`):
+
+```json
+{ "id": "omarchy.tray", "pinned": ["ai-brain-tray"], "hidden": [] }
+```
+
+`ai-brain-tray` ist die SNI-`Id` dieses Trays — dieselbe, die
+`busctl --user get-property … org.kde.StatusNotifierItem Id` ausgibt.
+
 #### Was am laufenden Compositor gemessen wurde
 
 Hyprland 0.56.2, zwei Ausgaben, Skalierung 1.25 (28.10.2026):
