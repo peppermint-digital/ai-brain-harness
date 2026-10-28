@@ -27,6 +27,34 @@
 //! 3. **Ablösen — oder sagen, dass es nicht ging.** Ein Neustart, der
 //!    scheitert, muss in der Zusammenfassung stehen, nicht im Nichts.
 //!
+//! ## Der Nachtrag vom 28.10.2026: ein Neustart erbt die falsche Umgebung
+//!
+//! Die erste Fassung (v0.5.4) löste den Tray korrekt ab — und startete ihn
+//! mit **der Umgebung des Einrichtungslaufs**. Wer `einrichten` über **ssh**
+//! ausführt, hat dort kein `WAYLAND_DISPLAY` und keine
+//! `HYPRLAND_INSTANCE_SIGNATURE`. Der neue Tray fand also keine
+//! Wayland-Verbindung, fiel auf das Menü der Leiste zurück
+//! (`ItemIsMenu = true`) — und das eigene Menü war weg.
+//!
+//! Gemessen auf Bastians Desktop: über ssh `b true`, von Hand mit
+//! `WAYLAND_DISPLAY=wayland-1` und der Hyprland-Signatur gestartet `b false`.
+//! Lokal ausgeführt war es von Anfang an richtig; **genau deshalb ist es hier
+//! nicht aufgefallen.**
+//!
+//! > **Ein Prozess zu ersetzen heisst nicht, ihn neu zu starten — es heisst,
+//! > ihn so wieder hinzustellen, wie er stand.** Dazu gehört seine Umgebung.
+//!
+//! Deshalb kommt die Sitzungsbindung jetzt aus `/proc/<pid>/environ` des
+//! **alten** Prozesses. Sie ist per Definition die richtige: Der Tray hing ja
+//! sichtbar in der Leiste.
+//!
+//! Zwei Alternativen wurden erwogen und nicht genommen:
+//!
+//! | Weg | Warum nicht |
+//! |---|---|
+//! | `hyprctl dispatch exec` | Nur Hyprland. Der Tray läuft auch unter sway, waybar, KDE und GNOME |
+//! | `systemd-run --user` | Setzt voraus, dass die Sitzung ihre Umgebung in den Benutzer-Manager importiert hat (`systemctl --user import-environment`). uwsm tut das, nicht jede Einrichtung |
+//!
 //! ## Was dieses Modul NICHT tut
 //!
 //! Es startet nichts, das vorher nicht lief. Wer seinen Tray beendet hat,
@@ -45,8 +73,13 @@ pub enum Lage {
     LaeuftNicht,
     /// Der laufende Prozess ist jünger als die Datei, also schon der neue.
     Aktuell,
-    /// Abgelöst: alter Prozess beendet, neuer gestartet.
+    /// Abgelöst: alter Prozess beendet, neuer gestartet — mit seiner
+    /// Sitzungsbindung.
     Aufgefrischt { alt: u32, neu: u32 },
+    /// Abgelöst, aber **ohne** Sitzungsbindung: Der alte Prozess hatte selbst
+    /// keine, oder sie war nicht zu lesen. Der neue sieht dann keinen
+    /// Bildschirm — unter Linux heisst das: kein eigenes Menü.
+    AufgefrischtBlind { alt: u32, neu: u32 },
     /// Er läuft noch alt, und wir konnten es nicht ändern.
     LaeuftAlt { pid: u32, grund: String },
     /// Auf dieser Plattform wird nicht nachgesehen.
@@ -62,6 +95,9 @@ impl Lage {
             Lage::Aufgefrischt { alt, neu } => {
                 format!("neu gestartet ({alt} → {neu})")
             }
+            Lage::AufgefrischtBlind { alt, neu } => {
+                format!("neu gestartet ({alt} → {neu}) — OHNE Sitzungsumgebung")
+            }
             Lage::LaeuftAlt { pid, grund } => {
                 format!("läuft noch in der ALTEN Fassung (Prozess {pid}): {grund}")
             }
@@ -69,9 +105,24 @@ impl Lage {
         }
     }
 
-    /// Muss der Mensch etwas tun?
-    pub fn braucht_hand(&self) -> bool {
-        matches!(self, Lage::LaeuftAlt { .. })
+    /// Was der Mensch dann tun soll — oder `None`, wenn nichts offen ist.
+    ///
+    /// Hier stand daneben ein `braucht_hand()`, das dasselbe sagte. Zwei
+    /// Wahrheiten über dieselbe Sache laufen auseinander, sobald eine Lage
+    /// dazukommt: `braucht_hand` vergisst man eher als den Satz, den der
+    /// Mensch liest.
+    pub fn rat(&self) -> Option<&'static str> {
+        match self {
+            Lage::LaeuftAlt { .. } => {
+                Some("Beende den Prozess und starte ihn neu, oder melde dich ab und wieder an.")
+            }
+            Lage::AufgefrischtBlind { .. } => Some(
+                "Das passiert, wenn `einrichten` über ssh läuft: Der neue Prozess findet \
+                 dann keine Bildschirmsitzung. Starte ihn aus einem Terminal AUF dem \
+                 Rechner neu — oder melde dich ab und wieder an.",
+            ),
+            _ => None,
+        }
     }
 }
 
@@ -100,8 +151,15 @@ fn auffrischen(programm: &Path, name: &str, args: &[&str]) -> Lage {
         return Lage::NichtGeprueft("Änderungszeit des Programms nicht lesbar");
     };
 
+    let Some(nutzer) = nutzer() else {
+        return Lage::NichtGeprueft("eigener Benutzer nicht zu ermitteln");
+    };
+
     let eigen = std::process::id();
-    let Some(pid) = suchen(name, args).into_iter().find(|p| *p != eigen) else {
+    let Some(pid) = suchen(name, args, &nutzer)
+        .into_iter()
+        .find(|p| *p != eigen)
+    else {
         return Lage::LaeuftNicht;
     };
 
@@ -116,6 +174,12 @@ fn auffrischen(programm: &Path, name: &str, args: &[&str]) -> Lage {
         return Lage::Aktuell;
     }
 
+    // **Vor** dem Beenden lesen: `/proc/<pid>/environ` verschwindet mit dem
+    // Prozess. Das ist die ganze Lehre aus dem Nachtrag oben — wer erst
+    // beendet und dann die Umgebung sucht, findet nichts mehr.
+    let umgebung = sitzungsumgebung(pid);
+    let hat_sitzung = umgebung.iter().any(|(k, _)| ist_bildschirm(k));
+
     beenden(pid);
 
     // Kurz warten, bis er das Symbol abgemeldet hat: Zwei Symbole gleichen
@@ -129,10 +193,80 @@ fn auffrischen(programm: &Path, name: &str, args: &[&str]) -> Lage {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    match starten(programm, args) {
-        Ok(neu) => Lage::Aufgefrischt { alt: pid, neu },
+    match starten(programm, args, &umgebung) {
+        Ok(neu) if hat_sitzung => Lage::Aufgefrischt { alt: pid, neu },
+        // Kein `WAYLAND_DISPLAY`, kein `DISPLAY`: Der neue Prozess sieht
+        // keinen Bildschirm. Gestartet wird er trotzdem — die alte Fassung
+        // hatte die Bindung ja auch nicht, es wird also nichts schlechter —
+        // aber die Zusammenfassung sagt es.
+        Ok(neu) => Lage::AufgefrischtBlind { alt: pid, neu },
         Err(grund) => Lage::LaeuftAlt { pid, grund },
     }
+}
+
+/// Die Sitzungsbindung eines laufenden Prozesses, aus `/proc/<pid>/environ`.
+///
+/// ## Warum eine Auswahl und nicht die ganze Umgebung
+///
+/// Die ganze zu übernehmen wäre verlockend — „stell ihn hin, wie er stand" —
+/// und falsch: Darin steckt auch ein `PATH` und ein `LANG` von damals, und
+/// ein Programm, das nach einem Update mit der Umgebung von vor zwei Wochen
+/// startet, ist schwerer zu erklären als eins, das sie frisch hat. Gebraucht
+/// wird genau das, was **an die Sitzung bindet** — und das ist eine kurze,
+/// benennbare Liste.
+///
+/// `WAYLAND_SOCKET` steht bewusst **nicht** darin: Das ist eine
+/// Dateizeigernummer, die nur im alten Prozess etwas bedeutet. Sie
+/// mitzugeben hiesse, dem neuen einen Zeiger auf nichts zu geben.
+fn sitzungsumgebung(pid: u32) -> Vec<(String, String)> {
+    /// Was an die Bildschirmsitzung bindet.
+    ///
+    /// `DISPLAY` und `XAUTHORITY` für X11, `WAYLAND_DISPLAY` für Wayland,
+    /// die Compositor-Sockel für Hyprland, sway und niri, dazu der
+    /// Sitzungsbus — ohne ihn findet der Tray keinen
+    /// `StatusNotifierWatcher`.
+    const NAMEN: [&str; 7] = [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "XAUTHORITY",
+        "HYPRLAND_INSTANCE_SIGNATURE",
+        "SWAYSOCK",
+        "NIRI_SOCKET",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ];
+
+    /// `XDG_RUNTIME_DIR`, `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP` und
+    /// Geschwister. Als Vorsilbe statt als Liste, weil hier regelmässig
+    /// etwas dazukommt und eine Liste dann still unvollständig wird.
+    const VORSILBE: &str = "XDG_";
+
+    let Ok(roh) = std::fs::read(format!("/proc/{pid}/environ")) else {
+        // Kein `/proc` (macOS) oder keine Leseerlaubnis. Dann bleibt die
+        // Umgebung dieses Laufs — unter macOS ist das richtig, solange
+        // `einrichten` in der Fenster-Sitzung läuft, und über ssh ist dort
+        // ohnehin keine Leiste zu erreichen.
+        return Vec::new();
+    };
+
+    roh.split(|b| *b == 0)
+        .filter(|teil| !teil.is_empty())
+        .filter_map(|teil| {
+            let text = String::from_utf8_lossy(teil);
+            let (name, wert) = text.split_once('=')?;
+
+            (NAMEN.contains(&name) || name.starts_with(VORSILBE))
+                .then(|| (name.to_string(), wert.to_string()))
+        })
+        .collect()
+}
+
+/// Bindet dieser Name an einen Bildschirm?
+///
+/// Nur diese zwei: Ein `XDG_RUNTIME_DIR` hat auch eine ssh-Sitzung, ein
+/// `DBUS_SESSION_BUS_ADDRESS` oft ebenfalls. Woran es wirklich hängt, ob ein
+/// Tray etwas sieht, sind `WAYLAND_DISPLAY` und `DISPLAY`.
+fn ist_bildschirm(name: &str) -> bool {
+    name == "WAYLAND_DISPLAY" || name == "DISPLAY"
 }
 
 /// Lief der Prozess schon, bevor das Programm geschrieben wurde?
@@ -154,9 +288,9 @@ fn ist_veraltet(lief_seit: SystemTime, programm_geaendert: SystemTime) -> bool {
 /// Über `pgrep`, weil es das unter Linux und macOS gibt und weil `/proc`
 /// unter macOS fehlt. `-x` vergleicht den ganzen Namen, nicht ein Stück
 /// davon: Ohne das träfe „ai-brain-harness" auch „ai-brain-harness-alt".
-fn suchen(name: &str, args: &[&str]) -> Vec<u32> {
+fn suchen(name: &str, args: &[&str], nutzer: &str) -> Vec<u32> {
     let mut befehl = Command::new("pgrep");
-    befehl.arg("-x").arg(name).arg("-u").arg(nutzer());
+    befehl.arg("-x").arg(name).arg("-u").arg(nutzer);
 
     // Mit Argumenten muss die ganze Befehlszeile verglichen werden, und
     // `-x` gilt dann für sie. Deshalb `-f` und ein Muster, das vorn
@@ -167,7 +301,7 @@ fn suchen(name: &str, args: &[&str]) -> Vec<u32> {
             .arg("-f")
             .arg(format!("{name} {}", args.join(" ")))
             .arg("-u")
-            .arg(nutzer());
+            .arg(nutzer);
     }
 
     let Ok(ausgabe) = befehl.stderr(Stdio::null()).output() else {
@@ -180,10 +314,41 @@ fn suchen(name: &str, args: &[&str]) -> Vec<u32> {
         .collect()
 }
 
-fn nutzer() -> String {
+/// Wer sind wir — als Zahl, nicht als Name aus der Umgebung.
+///
+/// ## Warum nicht `$USER`
+///
+/// Hier stand `std::env::var("USER")` mit `"0"` als Rückfall, und das ist
+/// genau die Art Fehler, die dieses Modul eigentlich fangen soll: Startet
+/// `einrichten` aus einer **leeren Umgebung** (`env -i`, ein systemd-Dienst,
+/// ein Wrapper), ist `USER` nicht gesetzt — dann suchte `pgrep -u 0` die
+/// Prozesse von **root**, fand nichts, und die Zusammenfassung meldete
+/// seelenruhig „lief nicht".
+///
+/// Gemessen am 28.10.2026: Über ssh ging es (dort setzt pam `USER`), mit
+/// `env -i` nicht. **Ein Rückfall, der eine falsche Antwort gibt, ist
+/// schlimmer als keiner** — er sieht aus wie ein Befund.
+///
+/// `id -u` fragt den Kern statt die Umgebung. Antwortet auch das nicht, wird
+/// **nicht geraten**: Dann sagt die Zusammenfassung, dass nicht nachgesehen
+/// wurde.
+fn nutzer() -> Option<String> {
+    let ausgabe = Command::new("id")
+        .arg("-u")
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    let uid = String::from_utf8_lossy(&ausgabe.stdout).trim().to_string();
+
+    if uid.chars().all(|c| c.is_ascii_digit()) && !uid.is_empty() {
+        return Some(uid);
+    }
+
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "0".into())
+        .ok()
+        .filter(|n| !n.trim().is_empty())
 }
 
 /// Wann ist dieser Prozess gestartet?
@@ -270,7 +435,7 @@ fn beenden(pid: u32) {
 /// SIGHUP. Das wäre der unangenehmste Ausgang — der Tray erscheint, und beim
 /// nächsten Fensterschliessen ist er weg, ohne dass jemand den Zusammenhang
 /// sieht.
-fn starten(programm: &Path, args: &[&str]) -> Result<u32, String> {
+fn starten(programm: &Path, args: &[&str], umgebung: &[(String, String)]) -> Result<u32, String> {
     let mit_setsid = Path::new("/usr/bin/setsid").is_file() || Path::new("/bin/setsid").is_file();
 
     let mut befehl = if mit_setsid {
@@ -283,6 +448,7 @@ fn starten(programm: &Path, args: &[&str]) -> Result<u32, String> {
 
     befehl
         .args(args)
+        .envs(umgebung.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -356,14 +522,16 @@ mod tests {
         assert!(ist_veraltet(jetzt, jetzt + Duration::from_secs(2)));
     }
 
-    /// Die Zusammenfassung muss jeden Ausgang in Worte fassen — und nur der
-    /// eine darf nach Handarbeit rufen.
+    /// Die Zusammenfassung muss jeden Ausgang in Worte fassen — und nur die
+    /// beiden Ausgänge, bei denen etwas offen bleibt, dürfen nach Handarbeit
+    /// rufen.
     #[test]
     fn jede_lage_hat_ihr_wort() {
         let faelle = [
             Lage::LaeuftNicht,
             Lage::Aktuell,
             Lage::Aufgefrischt { alt: 11, neu: 22 },
+            Lage::AufgefrischtBlind { alt: 11, neu: 22 },
             Lage::LaeuftAlt {
                 pid: 33,
                 grund: "Neustart gescheitert".into(),
@@ -377,15 +545,27 @@ mod tests {
             assert!(w.len() < 110, "zu lang für die Übersicht: {w}");
         }
 
-        assert!(!Lage::LaeuftNicht.braucht_hand());
-        assert!(!Lage::Aktuell.braucht_hand());
-        assert!(!Lage::Aufgefrischt { alt: 1, neu: 2 }.braucht_hand());
+        // Genau die zwei Ausgänge, bei denen etwas offen bleibt, geben einen
+        // Rat — und die anderen vier keinen.
+        assert!(Lage::AufgefrischtBlind { alt: 1, neu: 2 }.rat().is_some());
         assert!(Lage::LaeuftAlt {
             pid: 3,
             grund: "x".into()
         }
-        .braucht_hand());
-        assert!(!Lage::NichtGeprueft("x").braucht_hand());
+        .rat()
+        .is_some());
+
+        assert!(Lage::LaeuftNicht.rat().is_none());
+        assert!(Lage::Aktuell.rat().is_none());
+        assert!(Lage::Aufgefrischt { alt: 1, neu: 2 }.rat().is_none());
+        assert!(Lage::NichtGeprueft("x").rat().is_none());
+
+        // Der ssh-Fall muss als solcher benannt sein — sonst sucht jemand
+        // den Fehler im Tray statt in seinem Zugang.
+        assert!(Lage::AufgefrischtBlind { alt: 1, neu: 2 }
+            .rat()
+            .expect("Rat")
+            .contains("ssh"));
 
         // Die ALTE Fassung muss in der Zeile stehen — das ist der Satz, den
         // jemand lesen soll, bevor er den Fix für kaputt hält.
@@ -407,7 +587,7 @@ mod tests {
             matches!(lage, Lage::NichtGeprueft(_)),
             "{lage:?} — erwartet wurde NichtGeprueft"
         );
-        assert!(!lage.braucht_hand());
+        assert!(lage.rat().is_none());
     }
 
     /// `gestartet` liefert für den eigenen Prozess eine Zeit, die in der
@@ -435,5 +615,110 @@ mod tests {
             alter < Duration::from_secs(3600),
             "der Testlauf läuft angeblich seit {alter:?}"
         );
+    }
+
+    /// Die Sitzungsbindung des eigenen Prozesses ist zu finden — und es
+    /// kommt nur heraus, was wirklich bindet.
+    ///
+    /// Geprüft gegen den Testlauf selbst: Was `/proc/self/environ` enthält,
+    /// weiss auch `std::env`. Die Probe ist damit unabhängig davon, ob hier
+    /// gerade eine Bildschirmsitzung läuft.
+    #[test]
+    fn die_sitzungsbindung_kommt_aus_proc() {
+        if !Path::new("/proc/self/environ").exists() {
+            return;
+        }
+
+        let gelesen = sitzungsumgebung(std::process::id());
+
+        for (name, wert) in &gelesen {
+            assert_eq!(
+                std::env::var(name).ok().as_deref(),
+                Some(wert.as_str()),
+                "{name} stimmt nicht mit der eigenen Umgebung überein"
+            );
+
+            assert!(
+                name.starts_with("XDG_")
+                    || [
+                        "WAYLAND_DISPLAY",
+                        "DISPLAY",
+                        "XAUTHORITY",
+                        "HYPRLAND_INSTANCE_SIGNATURE",
+                        "SWAYSOCK",
+                        "NIRI_SOCKET",
+                        "DBUS_SESSION_BUS_ADDRESS",
+                    ]
+                    .contains(&name.as_str()),
+                "{name} gehört nicht zur Sitzungsbindung"
+            );
+        }
+
+        // Was es in der eigenen Umgebung gibt, muss auch ankommen — sonst
+        // hätte der Leser eine Lücke, die niemand sieht.
+        for name in ["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DISPLAY"] {
+            if std::env::var(name).is_ok() {
+                assert!(
+                    gelesen.iter().any(|(k, _)| k == name),
+                    "{name} steht in der Umgebung, kommt aber nicht mit"
+                );
+            }
+        }
+
+        // `WAYLAND_SOCKET` ist eine Dateizeigernummer und darf NIE mit.
+        assert!(!gelesen.iter().any(|(k, _)| k == "WAYLAND_SOCKET"));
+    }
+
+    /// Der eigene Benutzer wird ermittelt, nicht geraten — auch ohne `$USER`.
+    ///
+    /// Die Probe ruft `nutzer()` ohne jede Annahme über die Umgebung dieses
+    /// Testlaufs und prüft gegen `id -u`. Das ist die Stelle, an der die
+    /// erste Fassung mit `env -i` still ins Leere lief: `$USER` fehlte, der
+    /// Rückfall `"0"` suchte bei root, und „lief nicht" war die Antwort.
+    #[test]
+    fn der_eigene_benutzer_kommt_vom_kern() {
+        let Ok(ausgabe) = Command::new("id").arg("-u").output() else {
+            return;
+        };
+
+        let uid = String::from_utf8_lossy(&ausgabe.stdout).trim().to_string();
+
+        assert_eq!(nutzer().as_deref(), Some(uid.as_str()));
+        assert!(uid.chars().all(|c| c.is_ascii_digit()), "{uid}");
+
+        // Und niemals die 0, wenn wir nicht root sind.
+        if uid != "0" {
+            assert_ne!(nutzer().as_deref(), Some("0"));
+        }
+    }
+
+    /// Ein Prozess, den es nicht gibt, liefert nichts statt irgendetwas.
+    #[test]
+    fn ohne_prozess_keine_umgebung() {
+        // Prozessnummern über 4 Millionen gibt es auf einem gewöhnlichen
+        // Linux nicht (`pid_max` liegt bei 4194304).
+        assert!(sitzungsumgebung(4_194_303).is_empty());
+    }
+
+    /// An einem Bildschirm hängt es nur über diese zwei.
+    ///
+    /// Ein `XDG_RUNTIME_DIR` hat auch eine ssh-Sitzung — genau daran ist die
+    /// erste Fassung gescheitert: Sie war vorhanden, und der Tray startete
+    /// trotzdem blind.
+    #[test]
+    fn nur_zwei_namen_binden_an_einen_bildschirm() {
+        assert!(ist_bildschirm("WAYLAND_DISPLAY"));
+        assert!(ist_bildschirm("DISPLAY"));
+
+        for name in [
+            "XDG_RUNTIME_DIR",
+            "XDG_SESSION_TYPE",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "HOME",
+            "",
+        ] {
+            assert!(!ist_bildschirm(name), "{name}");
+        }
     }
 }

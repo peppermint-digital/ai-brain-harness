@@ -135,7 +135,10 @@ fn gelesen(args: &[String]) -> Result<Wunsch, String> {
 }
 
 pub fn verwalten(args: &[String]) -> Result<(), String> {
-    if args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
+    if args
+        .iter()
+        .any(|a| a == "--help" || a == "-h" || a == "help")
+    {
         print!("{HILFE}");
         return Ok(());
     }
@@ -163,6 +166,9 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
         for (was, lage) in &bericht.aufgefrischt {
             println!("  {was:<22}: {}", lage.wort());
         }
+
+        println!();
+        raten(&bericht);
 
         return Ok(());
     }
@@ -346,7 +352,11 @@ fn werkzeuge(bericht: &mut Bericht) {
                     for (name, drin) in &konten {
                         println!(
                             "              {name}: {}",
-                            if *drin { "Eintrag drin" } else { "Eintrag FEHLT" }
+                            if *drin {
+                                "Eintrag drin"
+                            } else {
+                                "Eintrag FEHLT"
+                            }
                         );
                     }
 
@@ -547,7 +557,10 @@ fn tray_anbieten(fragen: bool) -> String {
         return "abgelehnt".to_string();
     }
 
-    match std::process::Command::new(&tray).arg("--autostart").status() {
+    match std::process::Command::new(&tray)
+        .arg("--autostart")
+        .status()
+    {
         Ok(s) if s.success() => "eingerichtet".to_string(),
         Ok(s) => format!("nicht eingerichtet (Ausgangscode {:?})", s.code()),
         Err(e) => format!("nicht eingerichtet: {e}"),
@@ -619,6 +632,29 @@ fn frage(text: &str, fragen: bool) -> bool {
     antwort.is_empty() || antwort.starts_with('j') || antwort.starts_with('y')
 }
 
+/// Die Hinweise zu den aufgefrischten Programmen — in beiden Wegen dieselben.
+///
+/// Als eigene Funktion, weil `--nur-auffrischen` früh zurückkehrt und die
+/// Zusammenfassung gar nicht erreicht. Beim ersten Lauf fehlte der Hinweis
+/// dort deshalb genau in dem Fall, für den er gedacht ist — und das ist der
+/// Fall, den jemand über ssh zu sehen bekommt.
+///
+/// Der Rat selbst steht an der Lage, nicht hier: Welcher Satz zu welchem
+/// Ausgang gehört, weiss `neustart`.
+fn raten(b: &Bericht) {
+    for (was, lage) in &b.aufgefrischt {
+        if let Some(rat) = lage.rat() {
+            println!("⚠ {was}: {}", lage.wort());
+
+            for zeile in rat.split_inclusive(". ") {
+                println!("  {}", zeile.trim());
+            }
+
+            println!();
+        }
+    }
+}
+
 fn zusammenfassen(b: &Bericht) {
     println!();
     println!("── Fertig");
@@ -646,15 +682,7 @@ fn zusammenfassen(b: &Bericht) {
     println!("  Leitung jetzt : {}", leitung::stand_wort());
     println!();
 
-    for (was, lage) in &b.aufgefrischt {
-        if lage.braucht_hand() {
-            println!(
-                "⚠ {was} läuft noch in der alten Fassung. Beende den Prozess und starte ihn neu,"
-            );
-            println!("  oder melde dich ab und wieder an.");
-            println!();
-        }
-    }
+    raten(b);
 
     println!("Starte deine Werkzeuge neu, damit die MCP-Einträge greifen.");
 }
