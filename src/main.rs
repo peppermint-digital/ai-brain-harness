@@ -44,6 +44,7 @@ mod mcp;
 mod mcp_eintraege;
 mod meldung;
 mod nachricht;
+mod neustart;
 mod pairing;
 mod pusher;
 mod rechner;

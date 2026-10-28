@@ -33,7 +33,7 @@
 //! Eine Anzeige, die ihren eigenen Vorsatz wiedergibt, ist technisch richtig
 //! und beantwortet nichts.
 
-use crate::{config, erinnerungen, leitung, pairing, select, sync};
+use crate::{config, erinnerungen, leitung, neustart, pairing, select, sync};
 
 const HILFE: &str = "\
 Richtet diesen Rechner vollstaendig fuer AI Brain ein — in einem Befehl.
@@ -53,6 +53,8 @@ Optionen:
   --kein-dienst       Den Leitungsdienst nicht einrichten
   --kein-tray         Den Tray-Autostart nicht einrichten
   --kein-browser      Beim Verbinden keinen Browser oeffnen
+  --nur-auffrischen   Nur Tray und Leitungsdienst neu starten, falls sie noch
+                      in einer aelteren Fassung laufen — sonst nichts
   --instanz <adresse> Instanz, mit der verbunden wird
   --geraet <name>     Name dieses Geraetezugangs
 
@@ -75,10 +77,14 @@ struct Bericht {
     erinnerungen: String,
     leitung: String,
     tray: String,
+    /// Was mit den LAUFENDEN Prozessen geschah (#1136).
+    aufgefrischt: Vec<(&'static str, neustart::Lage)>,
 }
 
 struct Wunsch {
     fragen: bool,
+    /// Nur die laufenden Programme auffrischen, sonst nichts (#1136).
+    nur_auffrischen: bool,
     dienst: bool,
     tray: bool,
     browser: bool,
@@ -90,6 +96,7 @@ struct Wunsch {
 fn gelesen(args: &[String]) -> Result<Wunsch, String> {
     let mut w = Wunsch {
         fragen: true,
+        nur_auffrischen: false,
         dienst: true,
         tray: true,
         browser: true,
@@ -105,6 +112,7 @@ fn gelesen(args: &[String]) -> Result<Wunsch, String> {
             "--kein-dienst" => w.dienst = false,
             "--kein-tray" => w.tray = false,
             "--kein-browser" => w.browser = false,
+            "--nur-auffrischen" => w.nur_auffrischen = true,
             "--instanz" => {
                 i += 1;
                 w.instanz = Some(
@@ -134,6 +142,30 @@ pub fn verwalten(args: &[String]) -> Result<(), String> {
 
     let wunsch = gelesen(args)?;
     let mut bericht = Bericht::default();
+
+    // ## Nur auffrischen (#1136)
+    //
+    // Der kurze Weg nach einem Update: Was läuft, auf die Fassung bringen,
+    // die auf der Platte liegt — und sonst nichts. Kein Verbinden, kein
+    // Abgleich, keine Einträge.
+    //
+    // Es gibt ihn aus zwei Gründen. Erstens braucht jemand, bei dem der
+    // Neustart im vollen Lauf schiefging, einen zweiten Versuch, der nicht
+    // fünf Minuten dauert. Zweitens ist dieser Schritt damit **für sich**
+    // prüfbar: Sonst hinge die einzige Probe an einem Lauf, der eine
+    // Verbindung ins Netz braucht.
+    if wunsch.nur_auffrischen {
+        println!("── Laufende Programme auffrischen");
+        println!();
+        auffrischen(&mut bericht);
+        println!();
+
+        for (was, lage) in &bericht.aufgefrischt {
+            println!("  {was:<22}: {}", lage.wort());
+        }
+
+        return Ok(());
+    }
 
     schritt(1, "Verbindung");
     verbinden(&wunsch, &mut bericht)?;
@@ -468,6 +500,38 @@ fn leitung_und_leiste(wunsch: &Wunsch, bericht: &mut Bericht) {
     } else {
         tray_anbieten(wunsch.fragen)
     };
+
+    println!();
+    auffrischen(bericht);
+}
+
+/// Schritt 5b: Was schon läuft, auf die neue Fassung bringen (Bug #1136).
+///
+/// ## Warum das ein eigener Schritt ist und nicht Teil des Autostarts
+///
+/// Der Autostart ist eine Zusage für das **nächste Anmelden**. Nach einem
+/// Update sitzt aber jemand vor einem Rechner, auf dem die alte Fassung noch
+/// läuft — und prüft gleich, ob der Fix da ist. Am 28.10.2026 ist genau das
+/// passiert: Die Zusammenfassung sagte „Tray: eingerichtet", der Prozess war
+/// der vom Vortag, und über D-Bus liess sich nachweisen, dass noch das alte
+/// Verhalten galt.
+///
+/// Gestartet wird nur, was vorher schon lief. Wer seinen Tray beendet hat,
+/// hat ihn beendet.
+fn auffrischen(bericht: &mut Bericht) {
+    let eigen = std::env::current_exe().ok();
+
+    if let Some(tray) = tray_programm() {
+        let lage = neustart::tray_auffrischen(&tray);
+        println!("Tray, laufend  : {}", lage.wort());
+        bericht.aufgefrischt.push(("Tray", lage));
+    }
+
+    if let Some(harness) = eigen {
+        let lage = neustart::dienst_auffrischen(&harness);
+        println!("Leitungsdienst, laufend: {}", lage.wort());
+        bericht.aufgefrischt.push(("Leitungsdienst", lage));
+    }
 }
 
 /// Der Tray ist ein eigenes Programm — wir richten nur seinen Autostart ein,
@@ -571,8 +635,27 @@ fn zusammenfassen(b: &Bericht) {
     println!("  Erinnerungen  : {}", b.erinnerungen);
     println!("  Leitungsdienst: {}", b.leitung);
     println!("  Tray          : {}", b.tray);
+
+    // #1136: Was eingerichtet ist, sagt nichts darüber, was LÄUFT. Die zwei
+    // Begriffe standen bis zum 28.10.2026 in einer Zeile, und die Zeile
+    // behauptete das Falsche.
+    for (was, lage) in &b.aufgefrischt {
+        println!("  {was:<14}: {} (laufender Prozess)", lage.wort());
+    }
+
     println!("  Leitung jetzt : {}", leitung::stand_wort());
     println!();
+
+    for (was, lage) in &b.aufgefrischt {
+        if lage.braucht_hand() {
+            println!(
+                "⚠ {was} läuft noch in der alten Fassung. Beende den Prozess und starte ihn neu,"
+            );
+            println!("  oder melde dich ab und wieder an.");
+            println!();
+        }
+    }
+
     println!("Starte deine Werkzeuge neu, damit die MCP-Einträge greifen.");
 }
 
