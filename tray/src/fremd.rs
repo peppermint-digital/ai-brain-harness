@@ -56,6 +56,13 @@ enum Nachricht {
     /// Zeit, den Zustand neu zu lesen.
     Takt,
     Menue(MenuId),
+    /// Ein Punkt aus einem Menü, das nicht `muda` gehört.
+    ///
+    /// Heute gibt es das nur unter Linux (das eigene Menüfenster, #9008) —
+    /// aber `Signal` ist für alle drei Leisten dieselbe Aufzählung, und ein
+    /// Signal, das hier verschluckt wird, wäre ein Menüpunkt, der nichts tut.
+    /// Genau der Fehler, mit dem Bug #1124 angefangen hat.
+    Gewaehlt(Aktion),
     Ende,
 }
 
@@ -194,8 +201,14 @@ pub fn starten() -> Result<(), String> {
 
     std::thread::spawn(move || {
         while let Ok(s) = geweckt.recv() {
+            // Vollständig und ohne `_`: Kommt eine Variante dazu, soll der
+            // Übersetzer hier schimpfen. Beim Hinzufügen von
+            // `Signal::Gewaehlt` hat er das getan — und nur deshalb ist es
+            // aufgefallen, denn diese Datei wird auf einem Linux-Rechner gar
+            // nicht übersetzt. Dafür gibt es den „Bauen"-Workflow.
             let _ = bote_signal.send_event(match s {
                 Signal::Wecken => Nachricht::Takt,
+                Signal::Gewaehlt(aktion) => Nachricht::Gewaehlt(aktion),
                 Signal::Ende => Nachricht::Ende,
             });
         }
@@ -279,6 +292,8 @@ pub fn starten() -> Result<(), String> {
                     kern.tun(&aktion);
                 }
             }
+
+            Event::UserEvent(Nachricht::Gewaehlt(aktion)) => kern.tun(&aktion),
 
             Event::UserEvent(Nachricht::Takt) => {
                 kern.wissen = harness::abfragen();
