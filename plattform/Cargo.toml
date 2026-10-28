@@ -1,6 +1,6 @@
 [package]
 name = "ai-brain-plattform"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "Was Harness und Tray ueber die Plattform wissen muessen: beim Anmelden starten, etwas oeffnen"
 license = "MIT"
