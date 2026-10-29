@@ -55,6 +55,7 @@ mod tunnel;
 mod verbrauch;
 mod select;
 mod sitzung;
+mod stand;
 mod sync;
 
 use std::process::ExitCode;
@@ -102,7 +103,8 @@ Aufrufe:
                                   hier geben (start | status | stop)
   ai-brain-harness logs <kennung>     Was ein Lauf geschrieben hat
   ai-brain-harness stop <kennung>     Einen Lauf beenden
-  ai-brain-harness status             Zeigt die aktuelle Verbindung
+  ai-brain-harness status [--json]    Haengt dieser Rechner? Prueft die Instanz echt
+                                  (Verbindung, Leitung, Tunnel, Taktgeber, Laeufe)
   ai-brain-harness verbrauch [...]    Token und Zeit der Sitzungen melden
                                   (melden | zeigen | stand | an | aus | hook)
   ai-brain-harness configure          Traegt den MCP-Server in Claude Code und Codex ein
@@ -278,7 +280,7 @@ fn main() -> ExitCode {
         Some("meldung") => meldung::fuehren(&args[1..]),
         Some("logs") => register::protokoll_zeigen(&args[1..]),
         Some("stop") => register::stoppen(&args[1..]),
-        Some("status") => config::print_status(),
+        Some("status") => stand::zeigen(&args[1..]),
         Some("configure") | Some("configure-claude") => configure_tools(),
         Some("disconnect") => config::disconnect(),
         Some("--help") | Some("-h") | Some("help") | None => {

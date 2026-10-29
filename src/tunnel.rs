@@ -399,6 +399,40 @@ fn laeuft(port: u16, was: &str) -> bool {
     PathBuf::from(format!("/proc/{pid}")).exists()
 }
 
+/// Was `status` ueber den Tunnel in seine Antwort nimmt (#9059).
+#[derive(serde::Serialize)]
+pub struct TunnelKurz {
+    pub port: u16,
+    pub browser: bool,
+    pub ssh: bool,
+    /// `laeuft`, `halb` (nur eine Haelfte) oder `aus`.
+    pub grund: &'static str,
+}
+
+/// Der Stand des Tunnels — aus den Merkern, ohne den Port anzuklopfen.
+///
+/// **Bewusst ohne `browser_antwortet`.** Die HTTP-Probe ist die genauere
+/// Auskunft (sie findet auch einen Browser aus einer fremden Sitzung), aber sie
+/// kostet eine Verbindung mit zwei Sekunden Frist — in einer Anzeige, die alle
+/// 30 Sekunden gelesen wird. Wer es genau wissen will, ruft `tunnel status`;
+/// dort steht beides nebeneinander.
+pub fn kurzstand() -> TunnelKurz {
+    let port = PORT_STANDARD;
+    let browser = laeuft(port, "browser");
+    let ssh = laeuft(port, "ssh");
+
+    TunnelKurz {
+        port,
+        browser,
+        ssh,
+        grund: match (browser, ssh) {
+            (true, true) => "laeuft",
+            (false, false) => "aus",
+            _ => "halb",
+        },
+    }
+}
+
 fn beenden(port: u16, was: &str) -> bool {
     let Some(pid) = pid_lesen(port, was) else {
         return false;

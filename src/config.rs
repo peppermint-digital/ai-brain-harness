@@ -193,18 +193,10 @@ pub fn load() -> Result<Connection, String> {
     serde_json::from_str(&raw).map_err(|e| format!("{} ist beschädigt: {e}", path.display()))
 }
 
-pub fn print_status() -> Result<(), String> {
-    let connection = load()?;
-
-    println!("Verbunden mit : {}", connection.base_url);
-    println!("Instanz       : {}", connection.instance_name);
-    println!("Gerät         : {}", connection.device_name);
-    println!("Zugerechnet an: {}", connection.owner);
-    println!("Client-ID     : {}", connection.client_id);
-    println!("MCP-Endpunkt  : {}", connection.mcp_url);
-
-    Ok(())
-}
+// `print_status` ist am 29.10.2026 nach `stand::text` gewandert (#9059): Die
+// hinterlegte Verbindung allein beantwortet die Frage „haengt dieser Rechner?"
+// nicht — ein Zugang, den die Instanz laengst entzogen hat, las sich dort wie
+// ein verbundener. `status` prueft seither echt und zeigt die Felder dort.
 
 pub fn disconnect() -> Result<(), String> {
     let path = config_path()?;

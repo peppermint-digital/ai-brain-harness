@@ -1747,11 +1747,70 @@ weg, Ungelesenes bleibt.
 ## Weitere Befehle
 
 ```bash
-ai-brain-harness status            # Zeigt die aktuelle Verbindung
+ai-brain-harness status            # Hängt dieser Rechner? — echt geprüft
+ai-brain-harness status --json     # Dasselbe für Anzeigen (imkr-Sidebar, Leisten)
 ai-brain-harness configure         # Trägt den MCP-Server nachträglich ein (Claude + Codex)
 ai-brain-harness disconnect        # Entfernt die lokale Verbindung
 ai-brain-harness mcp               # Läuft als MCP-Server (startet Claude Code selbst)
 ```
+
+### `status` — eine Antwort statt vier Befehle
+
+```
+Instanz       : AI Brain (https://brain.example.com)
+Gerät         : laptop (linux x86_64)
+Zugerechnet an: Bastian
+MCP-Endpunkt  : https://brain.example.com/mcp/brain
+Erreichbar    : ja
+Leitung       : an automatisch — verbunden
+Tunnel        : aus (Port 9222)
+Taktgeber     : active
+Läufe         : 1 laufen, 0 warten
+```
+
+**`Erreichbar` ist echt gemessen**, nicht abgelesen: ein kurzer angemeldeter
+Aufruf (`GET /api/v1/geraete/ich`) mit **drei Sekunden** Frist. Bis zum
+29.10.2026 zeigte `status` nur die hinterlegte Verbindung — ein Rechner, dessen
+Zugang längst entzogen war, las sich dort wie ein verbundener.
+
+`--json` liefert dieselbe Messung für Programme:
+
+```json
+{
+  "verbunden": true,
+  "grund": "ok",
+  "meldung": null,
+  "instanz": "AI Brain",
+  "basis": "https://brain.example.com",
+  "geraet": "laptop (linux x86_64)",
+  "zugerechnet": "Bastian",
+  "leitung":   { "an": true, "grund": "automatisch", "lage": { "stand": "verbunden", … } },
+  "tunnel":    { "port": 9222, "browser": false, "ssh": false, "grund": "aus" },
+  "taktgeber": { "eingerichtet": true, "aktiv": "active" },
+  "laeufe":    { "laeuft": 1, "wartet": 0 }
+}
+```
+
+`grund` ist eines von **drei Wörtern** — `ok`, `abgemeldet`, `nicht erreichbar`.
+Darauf darf eine Anzeige vergleichen; der Satz daneben in `meldung` ist für
+Menschen und wird umformuliert.
+
+| `grund` | Was es heißt | Was zu tun ist |
+|---|---|---|
+| `ok` | Die Instanz hat auf einen angemeldeten Aufruf geantwortet | nichts |
+| `abgemeldet` | Kein Zugang hinterlegt, oder die Instanz weist ihn ab (401/403) | `ai-brain-harness connect <domain>` |
+| `nicht erreichbar` | Kein Netz, Zeitüberschreitung, Proxy, Neustart | warten |
+
+**Das kostet eine Anfrage, und nur eine.** Das Token kommt aus der Ablage —
+geprägt wird höchstens einmal je Stunde, und nur, wenn ohnehin keins gilt.
+Alles andere (Leitung, Tunnel, Taktgeber, Läufe) liest Dateien dieses Rechners.
+Gemessen am 29.10.2026 auf der Codingmachine: **90 ms** je Aufruf.
+
+> **Warum `leitung status --json` die Erreichbarkeit weiter NICHT prüft:** Den
+> liest der Tray im **Zwei**-Sekunden-Takt, und eine HTTP-Anfrage in diesem
+> Takt wäre Dauerlast auf der Instanz. `status` wird alle 30 Sekunden gelesen
+> (imkr-Plugin), und damit ist die echte Messung bezahlbar. Wer den Takt von
+> `status` verkürzt, muss diese Rechnung neu machen.
 
 `mcp` rufst du nicht von Hand auf — das macht Claude Code. Der Befehl hält die
 Gerätezugangsdaten, besorgt sich damit Zugangstoken, erneuert sie rechtzeitig

@@ -112,7 +112,7 @@ pub fn serve() -> Result<(), String> {
                 eprintln!("ai-brain-harness: {err}");
 
                 if !is_notification {
-                    respond_with_error(&mut stdout, &message, &err)?;
+                    respond_with_error(&mut stdout, &message, err.meldung())?;
                 }
 
                 continue;
@@ -217,6 +217,36 @@ pub fn token_verwerfen() {
     }
 }
 
+/// Warum ein Zugangstoken nicht zu haben war.
+///
+/// **Die beiden Fälle sind nicht derselbe Befund, und ein Mensch liest sie
+/// verschieden.** „Der Zugang ist weg" heisst: neu koppeln. „Die Instanz
+/// antwortet nicht" heisst: warten oder ans Netz denken. Solange beides eine
+/// Zeichenkette war, musste jeder Aufrufer sie nach Wörtern durchsuchen, um
+/// das eine vom anderen zu unterscheiden — und eine umformulierte Meldung
+/// hätte die Unterscheidung still gekippt (#9059).
+pub enum TokenFehler {
+    /// Die Instanz weist den Gerätezugang ab (401 am Token-Endpunkt). Entzogen
+    /// unter „Meine Geräte", oder das Geheimnis stimmt nicht mehr.
+    Abgewiesen(String),
+    /// Alles andere: kein Netz, Zeitüberschreitung, unlesbare Antwort.
+    Sonst(String),
+}
+
+impl TokenFehler {
+    pub fn meldung(&self) -> &str {
+        match self {
+            TokenFehler::Abgewiesen(m) | TokenFehler::Sonst(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Display for TokenFehler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.meldung())
+    }
+}
+
 /// Ein Zugangstoken für einen einzelnen Befehl.
 ///
 /// **Über Prozessgrenzen zwischengespeichert, nicht nur im Arbeitsspeicher.**
@@ -226,6 +256,14 @@ pub fn token_verwerfen() {
 /// pro Stunde auf diesem Rechner, weil mehrere Abholer liefen. Jede Prägung
 /// kostet die Instanz knapp eine halbe Sekunde (#7050).
 pub fn access_token(connection: &Connection) -> Result<String, String> {
+    access_token_typisiert(connection).map_err(|e| e.meldung().to_string())
+}
+
+/// Dasselbe, mit dem Grund als Typ statt als Satz.
+///
+/// Für Aufrufer, die „abgemeldet" von „nicht erreichbar" unterscheiden müssen —
+/// `status` tut das (#9059).
+pub fn access_token_typisiert(connection: &Connection) -> Result<String, TokenFehler> {
     if let Some(token) = token_aus_ablage() {
         return Ok(token);
     }
@@ -245,7 +283,10 @@ pub fn access_token(connection: &Connection) -> Result<String, String> {
 /// Der Puffer von 60 Sekunden ist kein Zierrat: ohne ihn läuft ein Token
 /// zwischen Prüfung und Ankunft beim Server ab, und der Aufruf scheitert mit
 /// einem 401, für den es keine erkennbare Ursache gibt.
-fn token(connection: &Connection, cache: &mut Option<TokenCache>) -> Result<String, String> {
+fn token(
+    connection: &Connection,
+    cache: &mut Option<TokenCache>,
+) -> Result<String, TokenFehler> {
     if let Some(cached) = cache {
         if Instant::now() < cached.valid_until {
             return Ok(cached.value.clone());
@@ -262,17 +303,17 @@ fn token(connection: &Connection, cache: &mut Option<TokenCache>) -> Result<Stri
             ("scope", &connection.scope),
         ])
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) => format!(
+            ureq::Error::Status(401, _) => TokenFehler::Abgewiesen(format!(
                 "Der Gerätezugang wurde abgelehnt. Wurde er unter „Meine Geräte“ entzogen? \
                  Dann neu koppeln: ai-brain-harness connect {}",
                 connection.base_url
-            ),
-            other => format!("Token nicht erhältlich: {other}"),
+            )),
+            other => TokenFehler::Sonst(format!("Token nicht erhältlich: {other}")),
         })?;
 
     let token: TokenResponse = response
         .into_json()
-        .map_err(|e| format!("Token-Antwort ist unlesbar: {e}"))?;
+        .map_err(|e| TokenFehler::Sonst(format!("Token-Antwort ist unlesbar: {e}")))?;
 
     let lifetime = Duration::from_secs(token.expires_in.saturating_sub(60).max(30));
 

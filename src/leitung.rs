@@ -574,6 +574,100 @@ fn status_json() -> Result<String, String> {
     .to_string())
 }
 
+/// Was `status` ueber die Leitung in seine Antwort nimmt (#9059).
+///
+/// Dieselben Werte wie `leitung status --json`, nur ohne Protokollpfad und
+/// ohne Verbindung — die stehen in `status` schon daneben. Eigener Typ statt
+/// `serde_json::json!`, damit die Felder an einer Stelle benannt sind.
+#[derive(Serialize)]
+pub struct LeitungKurz {
+    pub an: bool,
+    pub grund: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bis: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prozess: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lage: Option<Lage>,
+}
+
+/// Der Stand der Leitung, ohne eine einzige Anfrage an die Instanz.
+///
+/// Alles hier kommt aus Dateien dieses Rechners. Wer das aendert, macht
+/// `status` teuer — und `status` wird im 30-Sekunden-Takt gelesen.
+pub fn kurzstand() -> LeitungKurz {
+    let prozess = laufende_pid();
+    let stand = stand_jetzt();
+
+    LeitungKurz {
+        an: stand.an(),
+        grund: stand.wort(),
+        bis: schalter_lesen(),
+        prozess,
+        lage: lage_aus_datei().filter(|l| lage_gilt(l, prozess.is_some())),
+    }
+}
+
+/// Antwortet die Instanz diesem Geraetezugang gerade?
+///
+/// Drei Antworten, keine zwei: Ein Zugang, den die Instanz abweist, ist etwas
+/// anderes als eine Instanz, die nicht antwortet. Wer beides als „nicht
+/// verbunden" anzeigt, schickt den Leser in die falsche Richtung.
+pub enum Erreichbar {
+    /// Die Instanz hat auf einen angemeldeten Aufruf geantwortet.
+    Ja,
+    /// Die Instanz ist da und sagt nein — Zugang entzogen oder gesperrt.
+    Abgemeldet(String),
+    /// Kein Netz, Zeitueberschreitung, Proxy, Neustart.
+    Nicht(String),
+}
+
+/// Ein kurzer angemeldeter Aufruf gegen die Instanz — nichts weiter.
+///
+/// `GET geraete/ich` ist die billigste angemeldete Auskunft, die es gibt: Die
+/// Leitung fragt sie ohnehin alle fuenf Minuten, und sie antwortet mit dem
+/// eigenen Geraetedatensatz statt mit einer Liste.
+///
+/// **Das Token kommt aus der Ablage, es wird keines nebenbei erneuert.** Ein
+/// Abholer, der alle 30 Sekunden ein Token praegt, kostet die Instanz 120
+/// Praegungen pro Stunde zu je einer halben Sekunde (#7050). `access_token`
+/// legt es deshalb mit seiner ganzen Laufzeit ab; geprägt wird höchstens
+/// einmal je Stunde, und nur dann, wenn ohnehin keines gilt.
+///
+/// **Nicht ueber `anfrage_frist`.** Das wuerde bei 401 verwerfen und neu
+/// praegen — richtig fuer einen Befehl, der etwas erledigen soll, falsch fuer
+/// eine Messung: Sie soll sagen, was ist, nicht nachhelfen. Und ein `Sonst`
+/// mit dem Satz darin liesse „abgemeldet" nicht von „nicht erreichbar"
+/// unterscheiden.
+pub fn erreichbarkeit(c: &Connection, frist: Duration) -> Erreichbar {
+    let token = match mcp::access_token_typisiert(c) {
+        Ok(t) => t,
+        Err(mcp::TokenFehler::Abgewiesen(m)) => return Erreichbar::Abgemeldet(m),
+        Err(mcp::TokenFehler::Sonst(m)) => return Erreichbar::Nicht(m),
+    };
+
+    match ureq::get(&api_url(c, "geraete/ich"))
+        .timeout(frist)
+        .set("Accept", "application/json")
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+    {
+        Ok(_) => Erreichbar::Ja,
+        // 401 heisst hier: das Token aus der Ablage gilt nicht mehr. Es fliegt
+        // weg, damit der naechste Aufruf nicht dasselbe tote Token nimmt —
+        // aber es wird nicht an dieser Stelle ersetzt.
+        Err(ureq::Error::Status(401, _)) => {
+            mcp::token_verwerfen();
+            Erreichbar::Abgemeldet("Die Instanz hat die Anmeldung abgelehnt (401).".to_string())
+        }
+        Err(ureq::Error::Status(403, a)) => Erreichbar::Abgemeldet(grund(a)),
+        Err(ureq::Error::Status(code, a)) => {
+            Erreichbar::Nicht(format!("geraete/ich: {code} {}", grund(a)))
+        }
+        Err(e) => Erreichbar::Nicht(format!("geraete/ich: {e}")),
+    }
+}
+
 fn lage_gilt(lage: &Lage, prozess_lebt: bool) -> bool {
     prozess_lebt || lage.stand == "aufgelegt"
 }

@@ -268,6 +268,43 @@ fn zustand() -> Result<(), String> {
     Ok(())
 }
 
+/// Was `status` ueber den Taktgeber in seine Antwort nimmt (#9059).
+#[derive(serde::Serialize)]
+pub struct TaktgeberKurz {
+    /// Liegen die Unit-Dateien?
+    pub eingerichtet: bool,
+    /// Was `systemctl --user is-active` sagt — `active`, `inactive`, oder
+    /// `None`, wenn systemd nicht antwortet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aktiv: Option<String>,
+}
+
+/// Der Stand beider Taktgeber in einem Wort.
+///
+/// Gefragt wird nur der Dauerauftrags-Timer. Beide einzeln wären zwei
+/// `systemctl`-Aufrufe in einer Anzeige, die alle 30 Sekunden gelesen wird —
+/// und sie werden vom Einrichter immer gemeinsam gesetzt. Wer es getrennt
+/// braucht, ruft `taktgeber`.
+pub fn kurzstand() -> TaktgeberKurz {
+    let eingerichtet = unit_verzeichnis()
+        .map(|v| v.join(TIMER).exists())
+        .unwrap_or(false);
+
+    if !eingerichtet {
+        return TaktgeberKurz {
+            eingerichtet: false,
+            aktiv: None,
+        };
+    }
+
+    TaktgeberKurz {
+        eingerichtet: true,
+        aktiv: ausgabe(&["is-active", TIMER])
+            .map(|w| w.trim().to_string())
+            .filter(|w| !w.is_empty()),
+    }
+}
+
 fn lingering() -> Option<bool> {
     let nutzer = std::env::var("USER").ok()?;
 
