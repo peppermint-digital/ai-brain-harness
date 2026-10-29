@@ -1054,8 +1054,9 @@ ohnehin, ob sie steht.
 **Was unter Omarchy fehlt, und zwar benannt statt behauptet:** Ein zweiter
 Rechtsklick schließt die Karte der Leiste nicht, und Esc schließt sie auch
 nicht. Ein Klick daneben schließt sie. Warum das nicht an uns liegt, steht
-zwei Abschnitte weiter unten; gemeldet gehört es nach oben (Task #8958). Auf
-waybar, KDE, GNOME, macOS und Windows geht beides.
+zwei Abschnitte weiter unten; der Befund liegt bei Omarchy und ist in Task
+#8958 festgehalten (Bastian hat am 28.10.2026 entschieden, ihn nicht zu
+melden). Auf waybar, KDE, GNOME, macOS und Windows geht beides.
 
 **Sechs Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
 freigelegt (Stand 29.10.2026).**
@@ -1127,7 +1128,7 @@ Geprüft und verworfen wurden außerdem:
 | Weg | Warum nicht |
 |---|---|
 | Eine Option in Omarchy/quickshell | Es gibt keine. `~/.config/omarchy/shell.json` kennt zum Tray nur Layout, `pinned` und `hidden` |
-| Die drei Zeilen in `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet, nicht hierher kopiert |
+| Die drei Zeilen in `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Der Befund steht in Task #8958, hierher kopiert wird er nicht |
 | Item abmelden und neu anmelden | Symbol flackert, Leiste sieht einen Verbindungsabbruch. Tauscht den Fehler gegen einen schlimmeren |
 | Eine eigene Fläche dauerhaft über dem Symbol | Wo das Symbol liegt, wissen wir nicht verlässlich — der Bereich fährt ein und aus, Symbole kommen und gehen. Und sie würde Hover und Tooltip der Leiste schlucken |
 | Ein leeres DBusMenu anbieten | Die Karte geht trotzdem auf: `fittedContentHeight` setzt den Innenabstand als Untergrenze, es erscheint ein leerer Kasten von etwa 232×20 px |

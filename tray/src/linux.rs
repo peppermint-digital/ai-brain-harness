@@ -129,15 +129,18 @@ impl<const LEISTE: bool> ksni::Tray for Tray<LEISTE> {
     /// zweiter Rechtsklick schliesst die Karte der Leiste nicht, und Esc
     /// schliesst sie auch nicht (`Ui/PopupCard.qml` hat keine Tastenbehandlung).
     /// Ein Klick daneben schliesst sie — ihr `HyprlandFocusGrab` listet
-    /// `[Karte, Leistenfenster]`, also alles ausser Leiste und Karte. Das
-    /// gehört nach oben gemeldet, nicht hier nachgebaut: Task #8958.
+    /// `[Karte, Leistenfenster]`, also alles ausser Leiste und Karte.
+    ///
+    /// Der Befund liegt bei Omarchy, nicht bei uns, und er ist in Task #8958
+    /// festgehalten. Bastian hat am 28.10.2026 entschieden, ihn **nicht** zu
+    /// melden; nachgebaut wird er hier erst recht nicht.
     ///
     /// Verworfen, weil jeder Weg schlimmer wäre als das, was er behebt:
     ///
     /// | Weg | Warum nicht |
     /// |---|---|
     /// | Eine eigene Fläche dauerhaft über dem Symbol | Wir wüssten nicht verlässlich, wo das Symbol liegt (der Bereich fährt ein und aus, Symbole kommen und gehen), und sie würde Hover und Tooltip der Leiste schlucken. |
-    /// | `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet (#8958). |
+    /// | `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Der Befund steht in #8958. |
     /// | Ein leeres dbusmenu anbieten | Die Karte geht trotzdem auf: `fittedContentHeight` setzt den Innenabstand als Untergrenze, es erscheint ein leerer Kasten von etwa 232×20 px. |
     /// | Bei `AboutToShow` einen Auffänger aufziehen | Er läge **über** der Karte und würde deren Zeilen schlucken. Nur die Leistenzeile abzudecken wäre denkbar, hängt aber daran, wie Hyprland den Fokus-Griff löst — vorgemerkt, bis Bastian die jetzige Fassung benutzt hat. |
     ///
