@@ -8,19 +8,30 @@
 //! drei ohne D-Bus, damit macOS und Windows dieselbe Bedienung bekommen und
 //! nicht eine zweite, ähnliche.
 //!
-//! ## Zwei Betriebsarten, und welche gilt, entscheidet der Rechner
+//! ## Ein Menü, und der Linksklick schaltet (Stand 29.10.2026, #9060)
 //!
-//! | | Linksklick | Rechtsklick | Wo |
-//! |---|---|---|---|
-//! | **Eigenes Menü** | unser Fenster, Klick schaltet um | Menü der Leiste | Wayland mit wlr-layer-shell (Hyprland, sway, river …) |
-//! | **Menü der Leiste** | Menü der Leiste | Menü der Leiste | alles andere (GNOME, KDE, X11) |
+//! | | Linksklick | Rechtsklick |
+//! |---|---|---|
+//! | **`schalter`** (Vorgabe) | Live-Leitung an (30 min) oder aus | **das** Menü, von der Leiste gezeigt |
+//! | `eigen` | unser Menüfenster auf und zu | Menü der Leiste — also wieder zwei |
+//! | `leiste` | Menü der Leiste | Menü der Leiste |
 //!
-//! Die Unterscheidung liegt in `MENU_ON_ACTIVATE`, und das ist eine
-//! **Konstante** in `ksni::Tray` — also nicht zur Laufzeit umschaltbar.
-//! Deshalb ist `Tray` über `EIGEN` generisch: Es gibt zwei Ausprägungen
-//! derselben Struktur, und `starten` wählt eine. Der Umweg ist billiger als
-//! sein Gegenteil (zwei Strukturen mit demselben Inhalt), und er hält den
-//! Unterschied an genau einer Zeile.
+//! Bis v0.6.0 war `eigen` die Vorgabe. Damit gab es auf einem
+//! Hyprland-Rechner **zwei** Menüs über dieselbe Sache: unser Fenster am
+//! Linksklick, das der Leiste am Rechtsklick. Bastian am 29.10.2026,
+//! wörtlich: *„Es gibt jetzt ein Rechtsklick und ein Linksklick-Tray-Menü.
+//! Das macht ja keinen Sinn."*
+//!
+//! Gebeten hat er um „Linksklick = Schalter, Rechtsklick = unser Menü, und
+//! der zweite Rechtsklick macht es wieder zu". Die erste Hälfte steht hier.
+//! Die zweite ist auf Omarchy nicht zu bauen, und warum, steht gemessen an
+//! `MENU_ON_ACTIVATE`.
+//!
+//! `MENU_ON_ACTIVATE` ist eine **Konstante** in `ksni::Tray`, also nicht zur
+//! Laufzeit umschaltbar. Deshalb ist `Tray` über `LEISTE` generisch: Es gibt
+//! zwei Ausprägungen derselben Struktur, und `starten` wählt eine. Was der
+//! Klick dann *tut*, steht als `Klick` daneben — dafür braucht es keine
+//! Konstante, und zwei Betriebsarten teilen sich dieselbe Ausprägung.
 //!
 //! Die Entscheidung fällt beim Start, nicht je Klick: Eine Oberfläche
 //! wechselt ihre Fähigkeiten nicht, während ein Tray läuft.
@@ -40,23 +51,43 @@ const KANTE: u32 = 22;
 
 /// Womit sich die Betriebsart von Hand festlegen lässt.
 ///
-/// `eigen` erzwingt das eigene Fenster, `leiste` das Menü der Leiste. Alles
-/// andere (und nichts) heisst: nachsehen.
+/// `schalter` (oder nichts) heisst: Der Linksklick schaltet die Leitung.
+/// `eigen` erzwingt unser Menüfenster am Linksklick, `leiste` das Menü der
+/// Leiste. Alles andere zählt wie nichts.
 ///
 /// Dass es diesen Schalter gibt, ist keine Unentschlossenheit, sondern der
-/// Rückweg. Die fünf Fassungen des Symbolklicks seit v0.4.1 haben eins
+/// Rückweg. Die sechs Fassungen des Symbolklicks seit v0.4.1 haben eins
 /// gezeigt: Wenn etwas an diesem Klick klemmt, sitzt jemand an einem
 /// Arbeitsrechner und braucht die andere Fassung **jetzt**, nicht nach einem
 /// Release.
+///
+/// Seit v0.6.1 wird nicht mehr von vornherein nachgesehen, ob es layer-shell
+/// gibt: Die Vorgabe braucht keins. Nur `eigen` braucht es — und genau dort
+/// wird gemessen.
 const SCHALTER: &str = "AI_BRAIN_TRAY_MENUE";
 
-struct Tray<const EIGEN: bool> {
+/// Was der Linksklick auf das Symbol tut.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Klick {
+    /// Die Live-Leitung an (30 min) oder aus — die Vorgabe seit v0.6.1,
+    /// und dasselbe, was das Häkchen im Menü tut (`Kern::umschalten`).
+    Schalter,
+    /// Unser eigenes Menüfenster auf und zu (v0.5.4 bis v0.6.0).
+    EigenesFenster,
+    /// Die Leiste öffnet ihr Menü (v0.5.3). `Activate` kommt dann nicht an.
+    MenueDerLeiste,
+}
+
+struct Tray<const LEISTE: bool> {
     kern: Kern,
-    /// Das eigene Menüfenster — bei `EIGEN = false` immer leer.
+    /// Was der Linksklick tut. Bei `LEISTE = true` wird er nie gefragt —
+    /// dann ruft `ksni` `activate` gar nicht.
+    klick: Klick,
+    /// Das eigene Menüfenster — nur bei `Klick::EigenesFenster` benutzt.
     fenster: popup::Fenster,
 }
 
-impl<const EIGEN: bool> ksni::Tray for Tray<EIGEN> {
+impl<const LEISTE: bool> ksni::Tray for Tray<LEISTE> {
     /// **Wer das Menü öffnet: wir oder die Leiste.**
     ///
     /// `true` heisst: Die Leiste behandelt das Item als Menü (`ItemIsMenu`),
@@ -66,88 +97,90 @@ impl<const EIGEN: bool> ksni::Tray for Tray<EIGEN> {
     /// Menüweg erkennen.
     ///
     /// `false` heisst: Der Linksklick kommt als `Activate` bei uns an — und
-    /// genau das brauchen wir, um das Menü **selbst** zu zeigen.
+    /// genau das braucht die Vorgabe, denn der Linksklick **schaltet**.
     ///
-    /// ## Das ist die fünfte Fassung dieses Klicks, und sie löst endlich die
-    /// ganze Bitte
+    /// ## Das ist die sechste Fassung dieses Klicks (29.10.2026, #9060)
     ///
-    /// Bastian am 28.10.2026, wörtlich: *„Wenn ich links klicke ausserhalb
-    /// des Tray-Menüs drücke, muss es zugehen und wenn ich nochmal auf das
-    /// Tray-Symbol klicke mit links klicken, muss es halt auch zugehen, wie
-    /// ein Toggle auf Tray-Menü zu Tray-Menü."* Davor, zum selben Punkt:
-    /// *„Ja, das Tray geht mit Linksklick auf, aber wenn ich nochmal
-    /// Linksklick mache, geht es nicht wieder zu."*
+    /// Sie geht dahin zurück, wo v0.4.2 angefangen hat: Der Linksklick
+    /// schaltet die Live-Leitung. Dazwischen lagen vier Fassungen, und die
+    /// Liste steht im README.
     ///
-    /// Drei Fälle also, und alle drei müssen gehen:
+    /// ## Warum der Rechtsklick NICHT unser Fenster zeigen kann
     ///
-    /// 1. Linksklick aufs Symbol **öffnet**.
-    /// 2. Erneuter Linksklick aufs Symbol **schliesst**.
-    /// 3. Linksklick irgendwo daneben **schliesst** — auch auf der Leiste.
+    /// Gebeten war: links schalten, rechts unser Menü, zweiter Rechtsklick
+    /// macht es zu. Gemessen am Quelltext von Omarchy 4.0.4-1 /
+    /// quickshell 0.3.1 am 29.10.2026 — und daran scheitert die zweite
+    /// Hälfte, nicht an uns:
     ///
-    /// ## Warum die Leiste das nicht kann — und wir schon
+    /// | Frage | Befund |
+    /// |---|---|
+    /// | Wie meldet quickshell den Rechtsklick? | `Tray.qml`, `MouseArea.onPressed` → `displayMenu()` → `openTrayMenu()`. Bieten wir ein dbusmenu an, endet das **immer** mit `trayMenuOpen = true` — die Karte der Leiste, ohne Umschalten. |
+    /// | Und wenn wir keins anbieten? | `openTrayMenu` nimmt den Zweig `!item.menu` und ruft `item.display(…)`. Das endet in quickshell mit `qCritical "No menu present for"`: Es passiert **nichts**. |
+    /// | Ruft quickshell `ContextMenu`? | **Nie.** Im Programm gibt es genau eine Fundstelle der Zeichenkette, und die liegt im `qt_static_metacall` des erzeugten DBus-Stellvertreters. Die QML-Schnittstelle (`quickshell-service-statusnotifier.qmltypes`) kennt nur `activate`, `secondaryActivate`, `scroll` und `display` — kein `contextMenu`. |
+    /// | Könnte ein spec-treuer Host uns erreichen? | Heute nicht: `ksni` 0.3.7 beantwortet `ContextMenu` selbst mit `UnknownMethod("Not supported, please use `menu`")` und gibt die Eigenschaft `Menu` fest als `/MenuBar` heraus. „Kein dbusmenu anbieten" geht damit gar nicht. |
     ///
-    /// Mit `true` liefert die Leiste das Menü. In Omarchy (quickshell, Paket
-    /// 4.0.4-1, nachgelesen am 28.10.2026 in
-    /// `/usr/share/omarchy/shell/plugins/bar/widgets/Tray.qml`) ruft
-    /// `MouseArea.onClicked` bei `modelData.onlyMenu` `displayMenu()` →
-    /// `openTrayMenu()`, und das endet **immer** mit `trayMenuOpen = true`.
-    /// Ein Umschalten gibt es dort nicht; `close()` existiert, wird aber vom
-    /// Klickpfad nie gerufen. Der Fokus-Griff in `Ui/PopupCard.qml` listet
-    /// `[popup, Leistenfenster]` — ein Klick AUF der Leiste klärt ihn also
-    /// auch nicht. Fall 2 und Fall 3 fallen beide aus.
+    /// **Folge: Auf Omarchy erfahren wir nur den Linksklick.** „Links
+    /// schaltet" und „unser Fenster bleibt erreichbar" schliessen sich dort
+    /// also aus — es gibt nur einen Klick, den wir bekommen, und das Menü
+    /// muss erreichbar bleiben. Deshalb zeigt es die Leiste, am Rechtsklick,
+    /// und es ist das einzige.
     ///
-    /// Und wir können der Leiste nicht helfen: **StatusNotifierItem kennt
-    /// keinen Weg, dem Host „schliess mein Menü" zu sagen.** Das Menü ist
-    /// sein Fenster, wir liefern nur den Inhalt über DBusMenu. In keiner
-    /// Fassung der Spezifikation gibt es ein Signal dafür.
+    /// Was dabei verloren geht, und das ist benannt statt behauptet: Ein
+    /// zweiter Rechtsklick schliesst die Karte der Leiste nicht, und Esc
+    /// schliesst sie auch nicht (`Ui/PopupCard.qml` hat keine Tastenbehandlung).
+    /// Ein Klick daneben schliesst sie — ihr `HyprlandFocusGrab` listet
+    /// `[Karte, Leistenfenster]`, also alles ausser Leiste und Karte. Das
+    /// gehört nach oben gemeldet, nicht hier nachgebaut: Task #8958.
     ///
-    /// Geprüft wurden am 28.10.2026 ausserdem:
+    /// Verworfen, weil jeder Weg schlimmer wäre als das, was er behebt:
     ///
     /// | Weg | Warum nicht |
     /// |---|---|
-    /// | Eine Option in Omarchy/quickshell | Es gibt keine. `~/.config/omarchy/shell.json` kennt zum Tray nur Layout, `pinned` und `hidden` — kein Umschalten. |
-    /// | Die drei Zeilen in `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet (#8958), nicht hierher kopiert. |
-    /// | Item abmelden und neu anmelden | Symbol flackert, Leiste sieht einen Verbindungsabbruch. Tauscht den Fehler gegen einen schlimmeren. |
+    /// | Eine eigene Fläche dauerhaft über dem Symbol | Wir wüssten nicht verlässlich, wo das Symbol liegt (der Bereich fährt ein und aus, Symbole kommen und gehen), und sie würde Hover und Tooltip der Leiste schlucken. |
+    /// | `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet (#8958). |
+    /// | Ein leeres dbusmenu anbieten | Die Karte geht trotzdem auf: `fittedContentHeight` setzt den Innenabstand als Untergrenze, es erscheint ein leerer Kasten von etwa 232×20 px. |
+    /// | Bei `AboutToShow` einen Auffänger aufziehen | Er läge **über** der Karte und würde deren Zeilen schlucken. Nur die Leistenzeile abzudecken wäre denkbar, hängt aber daran, wie Hyprland den Fokus-Griff löst — vorgemerkt, bis Bastian die jetzige Fassung benutzt hat. |
     ///
-    /// Also zeichnet der Tray sein Menü selbst (`popup`). Damit liegt das
-    /// Umschalten vollständig bei uns — und zwar ohne Zustand, den zwei
-    /// Programme gleich sehen müssten: Der bildschirmgrosse Auffänger unter
-    /// dem Menü fängt den zweiten Klick, bevor er die Leiste erreicht. Die
-    /// Einzelheiten stehen im Kopf von `popup::flaeche`.
-    ///
-    /// Was das Menü *kann*, ändert sich nicht: dieselben Punkte, aus
-    /// derselben Liste (`menue::bauen`) — der Rechtsklick zeigt sie weiter
-    /// über die Leiste.
-    const MENU_ON_ACTIVATE: bool = !EIGEN;
+    /// Auf waybar, KDE, GNOME, macOS und Windows ist die Bitte damit
+    /// **vollständig** erfüllt: Dort ist das Menü am Rechtsklick ein
+    /// richtiges Menü mit Griff, das beim zweiten Klick und beim Klick
+    /// daneben zugeht. Fehlen tut nur Omarchys Karte etwas.
+    const MENU_ON_ACTIVATE: bool = LEISTE;
 
-    /// Der Linksklick, wenn wir das Menü selbst zeigen.
+    /// Der Linksklick.
     ///
-    /// Kommt nur an, solange **kein** Menü offen ist: Steht eins, liegt unser
-    /// Auffänger über der Leiste und nimmt den Klick. Das `offen()` hier ist
-    /// deshalb kein Umschalter für den Normalfall, sondern der Riegel für den
-    /// Sonderfall — eine Leiste, die `Activate` doppelt schickt, oder ein
-    /// Fenster, das noch aufräumt.
+    /// Kommt nur an, solange `MENU_ON_ACTIVATE` falsch ist — und bei
+    /// `Klick::EigenesFenster` zusätzlich nur, solange kein Menü offen ist:
+    /// Steht eins, liegt unser Auffänger über der Leiste und nimmt den Klick.
     fn activate(&mut self, _x: i32, _y: i32) {
-        if !EIGEN {
+        match self.klick {
+            // Die Vorgabe. Was dabei entschieden wird — und dass ohne
+            // Antwort NICHT geschaltet wird —, steht in `Kern::umschalten`
+            // und gilt für das Häkchen im Menü genauso.
+            Klick::Schalter => self.kern.umschalten(),
+
+            Klick::EigenesFenster => {
+                if self.fenster.offen() {
+                    self.fenster.schliessen();
+                    return;
+                }
+
+                let eintraege = menue::bauen(&self.kern);
+
+                if let Err(grund) = self.fenster.oeffnen(&eintraege, self.kern.signalweg()) {
+                    // Kein stilles Scheitern: Ein Klick, der nichts tut, ist
+                    // genau die Beschwerde, mit der #1124 angefangen hat. Die
+                    // Zeile steht im Protokoll des Trays, und der Fehler im
+                    // Menü selbst.
+                    eprintln!("Menüfenster ging nicht auf: {grund}");
+                    crate::kern::fehler_melden(grund);
+                }
+            }
+
             // Mit `MENU_ON_ACTIVATE = true` ruft `ksni` das hier nicht
             // einmal. Der Zweig steht da, damit niemand aus dem Vorhandensein
             // der Methode schliesst, dass der Klick etwas tut.
-            return;
-        }
-
-        if self.fenster.offen() {
-            self.fenster.schliessen();
-            return;
-        }
-
-        let eintraege = menue::bauen(&self.kern);
-
-        if let Err(grund) = self.fenster.oeffnen(&eintraege, self.kern.signalweg()) {
-            // Kein stilles Scheitern: Ein Klick, der nichts tut, ist genau
-            // die Beschwerde, mit der #1124 angefangen hat. Die Zeile steht
-            // im Protokoll des Trays, und der Fehler im Menü selbst.
-            eprintln!("Menüfenster ging nicht auf: {grund}");
-            crate::kern::fehler_melden(grund);
+            Klick::MenueDerLeiste => {}
         }
     }
 
@@ -200,13 +233,17 @@ impl<const EIGEN: bool> ksni::Tray for Tray<EIGEN> {
         }
     }
 
-    /// Das Menü der Leiste — dieselben Punkte wie unser Fenster.
+    /// Das Menü — in der Vorgabe **das** Menü, am Rechtsklick.
     ///
-    /// Gebaut aus `menue::bauen`, nicht hier zusammengestellt: Auf einem
-    /// Hyprland-Rechner gibt es jetzt **zwei** Menüs für dieselbe Sache
-    /// (unser Fenster am Linksklick, dieses am Rechtsklick). Zwei Listen
-    /// wären zwei Gelegenheiten, verschieden zu sein — und bis v0.5.3 war das
-    /// schon zwischen Linux und macOS so.
+    /// Gebaut aus `menue::bauen`, nicht hier zusammengestellt: Unter
+    /// `AI_BRAIN_TRAY_MENUE=eigen` gibt es zwei Menüs für dieselbe Sache
+    /// (unser Fenster am Linksklick, dieses am Rechtsklick), und zwei Listen
+    /// wären zwei Gelegenheiten, verschieden zu sein — bis v0.5.3 war das
+    /// zwischen Linux und macOS schon so.
+    ///
+    /// Dass diese Liste da ist, ist ausserdem die Bedingung dafür, dass der
+    /// Rechtsklick überhaupt etwas tut: Ohne dbusmenu zeigt quickshell gar
+    /// nichts. Siehe `MENU_ON_ACTIVATE`.
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
 
@@ -267,17 +304,39 @@ impl<const EIGEN: bool> ksni::Tray for Tray<EIGEN> {
     }
 }
 
-/// Zeigt der Tray sein Menü auf diesem Rechner selbst?
+/// Was der Linksklick auf diesem Rechner tun soll.
 ///
-/// Die Reihenfolge ist Absicht: erst der Schalter von Hand, dann die Messung.
-/// Wer `AI_BRAIN_TRAY_MENUE=leiste` setzt, soll das Menü der Leiste bekommen,
-/// auch wenn layer-shell da ist.
-fn eigenes_menue() -> bool {
-    match std::env::var(SCHALTER).unwrap_or_default().trim() {
-        "eigen" => true,
-        "leiste" => false,
-        _ => popup::moeglich(),
+/// Getrennt von der Umgebungsvariablen, damit die Entscheidung prüfbar ist:
+/// Ein Test, der `set_var` ruft, greift in alle gleichzeitig laufenden Tests
+/// hinein — und seit Rust 2024 ist `set_var` zu Recht `unsafe`.
+///
+/// `layer_shell` ist die Messung, ob es hier `zwlr_layer_shell_v1` gibt. Sie
+/// zählt **nur** für `eigen`: Wer ein Fenster verlangt, das wir nicht
+/// zeichnen können, bekommt den Schalter und eine Zeile im Protokoll — ein
+/// Klick, der nichts tut, ist schlimmer als der falsche Klick.
+fn entscheiden(wert: &str, layer_shell: impl FnOnce() -> bool) -> Klick {
+    match wert.trim() {
+        "eigen" => {
+            if layer_shell() {
+                Klick::EigenesFenster
+            } else {
+                eprintln!(
+                    "{SCHALTER}=eigen, aber hier gibt es kein wlr-layer-shell — \
+                     der Linksklick schaltet stattdessen die Leitung."
+                );
+                Klick::Schalter
+            }
+        }
+        "leiste" => Klick::MenueDerLeiste,
+        _ => Klick::Schalter,
     }
+}
+
+fn klick_art() -> Klick {
+    entscheiden(
+        &std::env::var(SCHALTER).unwrap_or_default(),
+        popup::moeglich,
+    )
 }
 
 /// Gibt es hier eine Leiste, die Symbole annimmt?
@@ -292,6 +351,7 @@ pub fn pruefen() -> Result<(), String> {
     // Watcher, nicht um den Klick.
     let handle = Tray::<false> {
         kern: Kern::neu(tx),
+        klick: Klick::Schalter,
         fenster: popup::Fenster::keins(),
     }
     .spawn()
@@ -303,18 +363,20 @@ pub fn pruefen() -> Result<(), String> {
 }
 
 pub fn starten() -> Result<(), String> {
-    if eigenes_menue() {
-        laufen::<true>()
-    } else {
-        laufen::<false>()
+    match klick_art() {
+        // Nur hier darf die Leiste das Menü am Linksklick öffnen, und nur
+        // hier ist `ItemIsMenu` wahr.
+        Klick::MenueDerLeiste => laufen::<true>(Klick::MenueDerLeiste),
+        andere => laufen::<false>(andere),
     }
 }
 
-fn laufen<const EIGEN: bool>() -> Result<(), String> {
+fn laufen<const LEISTE: bool>(klick: Klick) -> Result<(), String> {
     let (signal, geweckt) = mpsc::channel();
 
-    let handle = Tray::<EIGEN> {
+    let handle = Tray::<LEISTE> {
         kern: Kern::neu(signal),
+        klick,
         fenster: popup::Fenster::keins(),
     }
     .spawn()
@@ -326,7 +388,7 @@ fn laufen<const EIGEN: bool>() -> Result<(), String> {
         let wissen = crate::harness::abfragen();
         let fehler = crate::kern::fehler_abholen();
 
-        handle.update(|t: &mut Tray<EIGEN>| {
+        handle.update(|t: &mut Tray<LEISTE>| {
             t.kern.wissen = wissen;
             if fehler.is_some() {
                 t.kern.letzter_fehler = fehler;
@@ -343,7 +405,7 @@ fn laufen<const EIGEN: bool>() -> Result<(), String> {
                 // Der Punkt kam aus unserem Menüfenster. Ausgeführt wird er
                 // hier und nicht dort: `Kern` liegt im Tray, und was ein
                 // Punkt bedeutet, soll es nur einmal geben.
-                handle.update(|t: &mut Tray<EIGEN>| t.kern.tun(&aktion));
+                handle.update(|t: &mut Tray<LEISTE>| t.kern.tun(&aktion));
             }
 
             Ok(Signal::Ende) => {
@@ -371,58 +433,75 @@ fn laufen<const EIGEN: bool>() -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// Die Zusage aus #1124/#9006/#9008, in zwei Zeilen festgenagelt.
+    /// Die Zusage aus #1124/#9006/#9008/#9060, in zwei Zeilen festgenagelt.
     ///
-    /// Diese Konstante ist die ganze Entscheidung, und sie hat zwischen
-    /// v0.5.0, v0.5.1, v0.5.3 und v0.5.4 **viermal** den Wert gewechselt —
-    /// jedes Mal auf eine Aussage von Bastian hin, nie beim Aufräumen
-    /// nebenbei. Deshalb steht hier eine Probe und kein Kommentar.
+    /// Diese Konstante ist die ganze Entscheidung darüber, ob wir den
+    /// Linksklick überhaupt **sehen**, und sie hat zwischen v0.5.0, v0.5.1,
+    /// v0.5.3 und v0.5.4 viermal den Wert gewechselt — jedes Mal auf eine
+    /// Aussage von Bastian hin, nie beim Aufräumen nebenbei. Deshalb steht
+    /// hier eine Probe und kein Kommentar.
     ///
     /// Geprüft wird in einem `const`-Block, nicht zur Laufzeit: Der Wert ist
     /// zur Übersetzungszeit bekannt, also soll der Übersetzer schimpfen und
     /// nicht erst der Testlauf.
     #[test]
-    fn der_linksklick_oeffnet_immer_ein_menue() {
+    fn nur_die_leisten_fassung_laesst_den_klick_liegen() {
         const {
             assert!(
-                !<Tray<true> as ksni::Tray>::MENU_ON_ACTIVATE,
-                "Mit eigenem Fenster muss ItemIsMenu false sein, sonst kommt kein Activate an"
+                !<Tray<false> as ksni::Tray>::MENU_ON_ACTIVATE,
+                "Ohne ItemIsMenu=false kommt kein Activate an — dann schaltet der Linksklick nicht"
             )
         };
 
         const {
             assert!(
-                <Tray<false> as ksni::Tray>::MENU_ON_ACTIVATE,
-                "Ohne eigenes Fenster muss die Leiste das Menü öffnen — sonst tut der Klick nichts"
+                <Tray<true> as ksni::Tray>::MENU_ON_ACTIVATE,
+                "In der Leisten-Fassung muss die Leiste das Menü öffnen — sonst tut der Klick nichts"
             )
         };
     }
 
-    /// Der Schalter von Hand schlägt die Messung, in beide Richtungen.
+    /// Die Vorgabe ist der Schalter — und sie fragt nicht nach layer-shell.
     ///
-    /// Geprüft wird die Entscheidungslogik, nicht die Umgebungsvariable
-    /// selbst: Ein Test, der `set_var` ruft, greift in alle gleichzeitig
-    /// laufenden Tests hinein — und seit Rust 2024 ist `set_var` zu Recht
-    /// `unsafe`.
+    /// Das ist der Unterschied zu v0.5.4 bis v0.6.0: Dort entschied die
+    /// Messung, und auf einem Hyprland-Rechner kam dabei das eigene Fenster
+    /// heraus. Jetzt braucht die Vorgabe nichts, was gemessen werden müsste.
     #[test]
-    fn der_schalter_von_hand_schlaegt_die_messung() {
-        fn entscheiden(wert: &str, gemessen: bool) -> bool {
-            match wert.trim() {
-                "eigen" => true,
-                "leiste" => false,
-                _ => gemessen,
-            }
+    fn ohne_schalter_schaltet_der_linksklick() {
+        for wert in ["", "ja", "1", "wayland", "unsinn", "schalter"] {
+            assert_eq!(
+                entscheiden(wert, || panic!("gemessen, obwohl nicht nötig")),
+                Klick::Schalter,
+                "{wert}"
+            );
         }
+    }
 
-        assert!(entscheiden("eigen", false));
-        assert!(!entscheiden("leiste", true));
-        assert!(entscheiden(" eigen ", false), "Leerzeichen zählen nicht");
+    /// Der Schalter von Hand schlägt die Vorgabe, in beide Richtungen.
+    #[test]
+    fn der_schalter_von_hand_waehlt_die_fassung() {
+        assert_eq!(entscheiden("eigen", || true), Klick::EigenesFenster);
+        assert_eq!(entscheiden("leiste", || true), Klick::MenueDerLeiste);
+        assert_eq!(
+            entscheiden(" eigen ", || true),
+            Klick::EigenesFenster,
+            "Leerzeichen zählen nicht"
+        );
+    }
 
-        // Alles andere fragt nach.
-        for wert in ["", "ja", "1", "wayland", "unsinn"] {
-            assert!(entscheiden(wert, true), "{wert}");
-            assert!(!entscheiden(wert, false), "{wert}");
-        }
+    /// `eigen` ohne layer-shell gibt den Schalter, nicht einen toten Klick.
+    ///
+    /// Ein Fenster, das wir nicht zeichnen können, wäre ein Klick, der nichts
+    /// tut — genau die Beschwerde, mit der #1124 angefangen hat.
+    #[test]
+    fn eigen_ohne_layer_shell_faellt_auf_den_schalter_zurueck() {
+        assert_eq!(entscheiden("eigen", || false), Klick::Schalter);
+
+        // `leiste` braucht kein layer-shell und fragt auch nicht danach.
+        assert_eq!(
+            entscheiden("leiste", || panic!("gemessen, obwohl nicht nötig")),
+            Klick::MenueDerLeiste
+        );
     }
 
     /// Beide Menüs kommen aus derselben Liste.

@@ -5,9 +5,12 @@
 //! hier: welcher Harness-Aufruf zu welchem Menüpunkt gehört und wie ein Fehler
 //! aus dem Hintergrund zurückkommt.
 //!
-//! Der Klick auf das Symbol selbst steht **nicht** hier, weil er nichts tut,
-//! was eine Regel bräuchte: Er öffnet das Menü und schliesst es wieder. Wer
-//! es zeigt — wir oder die Leiste —, entscheidet `linux.rs`.
+//! Der Klick auf das Symbol selbst steht seit v0.6.1 **auch** hier, denn er
+//! hat wieder eine Regel: Er schaltet die Live-Leitung, und zwar nach
+//! derselben Entscheidung wie das Häkchen im Menü (`schritt`). Bis v0.6.0
+//! öffnete er nur ein Menü und brauchte dafür keine — nachzulesen an
+//! `MENU_ON_ACTIVATE` in `linux.rs`, wo auch steht, welche Leiste welchen
+//! Klick überhaupt zu uns durchlässt.
 
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -21,12 +24,48 @@ pub const TAKT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Die Dauern im Menü. 8 h ist die Obergrenze des Harness.
 pub const DAUERN: [(&str, &str); 3] = [("30 min", "30m"), ("2 h", "2h"), ("8 h", "8h")];
 
-/// Was das Häkchen einschaltet, wenn die Leitung aus ist — dieselbe Vorgabe
+/// Was ein Klick einschaltet, wenn die Leitung aus ist — dieselbe Vorgabe
 /// wie `leitung an` ohne `--dauer`.
 ///
-/// Der Name stammt aus der Zeit, in der der Linksklick geschaltet hat (v0.4.2).
-/// Er bleibt, weil er in der Vorgeschichte und in #8932 so zitiert ist.
+/// Der Name kam von v0.4.2, wo der Linksklick schaltete, und stand von v0.5.0
+/// bis v0.6.0 nur noch für das Häkchen im Menü. Seit v0.6.1 (#9060) schaltet
+/// der Linksklick wieder, und der Name ist wieder wörtlich wahr. In der
+/// Vorgeschichte und in #8932 ist er ohnehin so zitiert.
 pub const KLICK_DAUER: &str = "30m";
+
+/// Was ein Klick auf die Leitung auslöst.
+///
+/// Die Aufzählung gibt es, damit die Entscheidung prüfbar ist, ohne dass ein
+/// Harness läuft: `schritt` entscheidet, `Kern::umschalten` führt aus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Schritt {
+    /// `leitung an --dauer <dauer>`
+    An(&'static str),
+    /// `leitung aus`
+    Aus,
+}
+
+/// Die Entscheidung hinter Linksklick und Häkchen — ohne Nebenwirkung.
+///
+/// Eine Stelle für beide: Seit v0.6.1 schaltet der Linksklick wieder (#9060),
+/// und das Häkchen im Menü tut dasselbe. Zwei Stellen wären zwei
+/// Gelegenheiten, verschieden zu entscheiden.
+///
+/// `None` heisst: nicht schalten. Das gilt für `Wissen::Unbekannt` — ein
+/// Klick, der mangels Antwort das Gegenteil des Gewollten tut, wäre der
+/// nächste Ärger.
+pub fn schritt(wissen: &Wissen) -> Option<Schritt> {
+    match wissen {
+        Wissen::Unbekannt => None,
+        Wissen::Da(s) if s.an => Some(Schritt::Aus),
+        // `Wissen::Da` mit ausgeschalteter Leitung — und `Wissen::Fehler`.
+        // Letzteres ist das Verhalten, das das Häkchen seit v0.5.0 hat, und
+        // es ist hier NICHT stillschweigend geändert worden: Dass ein
+        // unlesbarer Harness-Status wie „aus" behandelt wird, ist eine eigene
+        // Entscheidung und gehört nicht in einen Umbau am Klick.
+        _ => Some(Schritt::An(KLICK_DAUER)),
+    }
+}
 
 /// Der Fehler der letzten Aktion, vom Hintergrund-Faden an die Abfrage.
 static FEHLER: Mutex<Option<String>> = Mutex::new(None);
@@ -123,21 +162,23 @@ impl Kern {
     /// `leitung an` und hebt ein Veto auf, Haken raus heisst `leitung aus`
     /// und setzt es. Das bleibt so — nur der Weg INS Menü hat mehrfach
     /// gewechselt: v0.5.1 auf den Rechtsklick, v0.5.3 zurück auf beide
-    /// Klicks, und seit v0.5.4 zeigt der Linksklick unter Wayland unser
-    /// **eigenes** Menüfenster, damit ein zweiter Klick es wieder schliesst.
-    /// Die Begründung steht in `linux.rs` und in Bug #1124.
+    /// Klicks, und v0.5.4 bis v0.6.0 zeigte der Linksklick unter Wayland
+    /// unser **eigenes** Menüfenster, damit ein zweiter Klick es schliesst.
     ///
-    /// Wissen wir nichts, wird NICHT geschaltet: Ein Klick, der mangels
-    /// Antwort das Gegenteil des Gewollten tut, wäre der nächste Ärger.
+    /// **Seit v0.6.1 schaltet der Linksklick wieder selbst (#9060)** — und
+    /// ruft dazu genau diese Methode. Nicht, weil die Begründung von v0.5.0
+    /// falsch geworden wäre, sondern weil sich das eigene Fenster und „ein
+    /// Menü" nicht beides haben liessen: Auf Omarchy ist der Linksklick der
+    /// einzige Klick, der bei uns ankommt. Gemessen steht das an
+    /// `MENU_ON_ACTIVATE` in `linux.rs`, die Bitte dahinter in Task #9060.
+    ///
+    /// Wissen wir nichts, wird NICHT geschaltet — die Entscheidung dazu
+    /// steht in `schritt`, damit Klick und Häkchen sie teilen.
     pub fn umschalten(&mut self) {
-        if !self.weiss_etwas() {
-            return;
-        }
-
-        if self.an() {
-            self.ausschalten();
-        } else {
-            self.einschalten(KLICK_DAUER);
+        match schritt(&self.wissen) {
+            Some(Schritt::Aus) => self.ausschalten(),
+            Some(Schritt::An(dauer)) => self.einschalten(dauer),
+            None => {}
         }
     }
 
@@ -165,12 +206,13 @@ impl Kern {
     ///
     /// Diesen Weg gibt es seit v0.5.1, und dort hing er am **Linksklick**:
     /// Rechtsklick oeffnete das Menue, Linksklick die Anwendung — wie bei den
-    /// anderen Symbolen in Bastians Leiste. Seit v0.5.3 oeffnet der Linksklick
+    /// anderen Symbolen in Bastians Leiste. Ab v0.5.3 oeffnete der Linksklick
     /// wieder das Menue (Bastian am 28.10.2026: „der sollte doch einfach nur
-    /// das Tray-Menue aufmachen"), und damit ist hier nur noch der sichtbare
-    /// Punkt im Menue uebrig.
+    /// das Tray-Menue aufmachen"), seit v0.6.1 schaltet er die Leitung — und
+    /// damit ist hier durchgehend nur noch der sichtbare Punkt im Menue
+    /// uebrig.
     ///
-    /// Die fuenf Fassungen des Symbolklicks und ihre Gruende stehen an einer
+    /// Die sechs Fassungen des Symbolklicks und ihre Gruende stehen an einer
     /// Stelle: an `MENU_ON_ACTIVATE` in `linux.rs`.
     ///
     /// Ohne bekannte Adresse passiert nichts, und der Punkt ist ausgegraut —
@@ -188,10 +230,13 @@ impl Kern {
     /// Eine Aktion aus dem Menü ausführen — egal, welches Menü sie geschickt
     /// hat.
     ///
-    /// Es gibt auf einem Linux-Rechner jetzt **zwei** Menüs für dieselben
-    /// Punkte: unser Fenster am Linksklick und das der Leiste am Rechtsklick
-    /// (#9008). Eine zweite Stelle, die entscheidet, was „AI Brain öffnen"
-    /// bedeutet, wäre die Stelle, an der die beiden auseinanderlaufen.
+    /// Von v0.5.4 bis v0.6.0 gab es auf einem Linux-Rechner **zwei** Menüs
+    /// für dieselben Punkte: unser Fenster am Linksklick und das der Leiste
+    /// am Rechtsklick (#9008). Genau das hat Bastian am 29.10.2026 beendet
+    /// (#9060) — in der Vorgabe ist es wieder eins, unter
+    /// `AI_BRAIN_TRAY_MENUE=eigen` sind es weiter zwei. Eine zweite Stelle,
+    /// die entscheidet, was „AI Brain öffnen" bedeutet, wäre die Stelle, an
+    /// der sie auseinanderlaufen.
     pub fn tun(&mut self, aktion: &crate::menue::Aktion) {
         use crate::menue::Aktion;
 
@@ -343,5 +388,93 @@ mod tests {
         k.beenden();
 
         assert!(matches!(rx.try_recv(), Ok(Signal::Ende)));
+    }
+
+    // ## Die Klick-Logik, vier Proben (#9060)
+    //
+    // Seit v0.6.1 ist der Linksklick auf das Symbol der Hauptweg zum
+    // Schalten — und er ist am laufenden Rechner nur von Hand prüfbar, weil
+    // dazu jemand auf ein Symbol in einer Leiste klicken muss. Deshalb liegt
+    // die Entscheidung als reine Funktion daneben und wird hier geprüft, in
+    // allen vier Zuständen, die `Wissen` kennt.
+
+    /// Ohne Antwort schaltet der Klick nicht.
+    ///
+    /// Das ist der Fall direkt nach dem Start, bevor die erste Abfrage durch
+    /// ist. Ein Klick, der dann einschaltet, weil er „aus" vermutet, schaltet
+    /// im Zweifel das Gegenteil des Gewollten.
+    #[test]
+    fn ohne_antwort_entscheidet_der_klick_nichts() {
+        assert_eq!(schritt(&Wissen::Unbekannt), None);
+    }
+
+    /// Leitung aus → an, und zwar für 30 Minuten.
+    #[test]
+    fn aus_wird_an_fuer_dreissig_minuten() {
+        let wissen = Wissen::Da(Status {
+            an: false,
+            ..Status::default()
+        });
+
+        assert_eq!(schritt(&wissen), Some(Schritt::An("30m")));
+    }
+
+    /// Leitung an → aus.
+    #[test]
+    fn an_wird_aus() {
+        let wissen = Wissen::Da(Status {
+            an: true,
+            ..Status::default()
+        });
+
+        assert_eq!(schritt(&wissen), Some(Schritt::Aus));
+    }
+
+    /// Ein unlesbarer Status gilt wie „aus" — festgehalten, nicht gewollt.
+    ///
+    /// `Wissen::Fehler` heisst: Der Harness hat nicht oder unlesbar
+    /// geantwortet. Wir wissen also gerade NICHT, ob die Leitung läuft, und
+    /// trotzdem schaltet der Klick ein. Das ist das Verhalten, das das
+    /// Häkchen seit v0.5.0 hat (`weiss_etwas()` ist für `Fehler` wahr), und
+    /// es bleibt in v0.6.1 unverändert: Ein Umbau am Klick ist nicht der
+    /// Ort, an dem man eine zweite Entscheidung nebenbei mitändert.
+    ///
+    /// Diese Probe steht hier, damit die Stelle benannt ist und nicht
+    /// jemandem später als Zufall begegnet. Gemeldet als Bug.
+    #[test]
+    fn ein_unlesbarer_status_gilt_wie_aus() {
+        let wissen = Wissen::Fehler("Harness stumm".into());
+
+        assert_eq!(schritt(&wissen), Some(Schritt::An("30m")));
+
+        // Und das ist derselbe Zustand, in dem das Häkchen anklickbar ist —
+        // die beiden entscheiden nachweislich gleich.
+        let (k, _rx) = kern(Wissen::Fehler("Harness stumm".into()));
+        assert!(k.weiss_etwas());
+        assert!(!k.an());
+    }
+
+    /// Der Störfall schaltet ein, nicht auf — dafür ist „aufräumen" da.
+    ///
+    /// Schalter aus, Prozess läuft weiter: Der Klick auf das Symbol schaltet
+    /// hier ein, genau wie das Häkchen. Aufgeräumt wird über den eigenen
+    /// Punkt im Menü (`aufraeumen_noetig`), nicht über den Symbolklick — es
+    /// gibt nur einen Klick, und der kann nicht beides bedeuten.
+    #[test]
+    fn im_stoerfall_schaltet_der_klick_ein_und_raeumt_nicht_auf() {
+        let wissen = Wissen::Da(Status {
+            an: false,
+            prozess: Some(4711),
+            ..Status::default()
+        });
+
+        assert_eq!(schritt(&wissen), Some(Schritt::An("30m")));
+
+        let (k, _rx) = kern(Wissen::Da(Status {
+            an: false,
+            prozess: Some(4711),
+            ..Status::default()
+        }));
+        assert!(k.aufraeumen_noetig());
     }
 }

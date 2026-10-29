@@ -68,16 +68,22 @@ Aufrufe:
   ai-brain-tray --kein-autostart
 
 Bedienung:
-  Linksklick    oeffnet das Menue, ein zweiter Klick schliesst es wieder —
-                und ein Klick daneben auch
-  Rechtsklick   oeffnet das Menue der Leiste (gleiche Punkte)
+  Linksklick    schaltet die Live-Leitung an (30 min) oder aus
+  Rechtsklick   oeffnet das Menue
   Im Menue      Haekchen „Live-Leitung“, Dauern, AI Brain oeffnen, Protokoll
-                oeffnen, Beenden; Esc schliesst, Pfeile und Eingabe waehlen
+                oeffnen, Beenden
 
-Das Umschalten braucht ein eigenes Menuefenster, und das gibt es nur unter
-Wayland mit wlr-layer-shell (Hyprland, sway, river). Sonst oeffnet die Leiste
-das Menue selbst, und dann kann nur sie es wieder schliessen.
-AI_BRAIN_TRAY_MENUE=eigen bzw. =leiste legt es von Hand fest.
+Das Menue zeigt die Leiste. Unter Omarchy (quickshell) schliesst ein zweiter
+Rechtsklick es nicht wieder — ein Klick daneben schon. Das liegt an der
+Leiste: StatusNotifierItem hat keinen Weg, ihr „schliess mein Menue“ zu sagen,
+und quickshell ruft ContextMenu nicht.
+
+AI_BRAIN_TRAY_MENUE legt die Bedienung von Hand fest:
+  schalter   Vorgabe, siehe oben
+  eigen      Linksklick zeigt unser eigenes Menuefenster (auf/zu, Esc, Klick
+             daneben); braucht Wayland mit wlr-layer-shell. Der Rechtsklick
+             zeigt dann weiter das Menue der Leiste — also zwei Menues.
+  leiste     Linksklick oeffnet das Menue der Leiste, es wird nicht geschaltet
 
 Das Symbol: grau nicht verbunden, blau verbunden, gruen Leitung laeuft,
 gelb unterwegs, rot gestoert. Gefuellt heisst Leitung an, hohl heisst aus.
@@ -96,9 +102,10 @@ fn main() {
         Some("--kein-autostart") => autostart::aus(),
 
         // Nicht in der Hilfe: Diesen Aufruf macht der Tray an sich selbst,
-        // wenn der Linksklick das Menü öffnet. Dass er aber **aufrufbar**
-        // ist, ist kein Zufall — so lässt sich das Fenster ohne Leiste und
-        // ohne Maus prüfen:
+        // wenn der Linksklick unser Menüfenster öffnet
+        // (`AI_BRAIN_TRAY_MENUE=eigen`, bis v0.6.0 die Vorgabe). Dass er aber
+        // **aufrufbar** ist, ist kein Zufall — so lässt sich das Fenster ohne
+        // Leiste und ohne Maus prüfen:
         //
         //   ai-brain-tray --menue < menue.json
         //

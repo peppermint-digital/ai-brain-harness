@@ -13,6 +13,13 @@
 //! anbieten, sind schlimmer als ein unbequemes. Deshalb beschreibt dieses
 //! Modul das Menü einmal, und die drei Anbindungen zeichnen nur noch.
 //!
+//! **Nachtrag 29.10.2026 (v0.6.1, #9060):** Zwei Menüs auf demselben Rechner
+//! waren auch *gleich* bestückt zu viel — Bastian: *„Das macht ja keinen
+//! Sinn."* In der Vorgabe gibt es jetzt wieder eines, am Rechtsklick, und der
+//! Linksklick schaltet. Dieses Modul ändert sich dadurch nicht: Unser Fenster
+//! gibt es weiter (`AI_BRAIN_TRAY_MENUE=eigen`), und zwei Zeichner über eine
+//! Liste bleiben richtig, auch wenn nur einer gleichzeitig zu sehen ist.
+//!
 //! Siehe auch das Wiki: *Zwei Tabellen über dieselbe Sache laufen auseinander
 //! — und niemand sieht es.*
 //!

@@ -843,11 +843,12 @@ AI Brain freigegeben hat. Damit gibt es drei Einträge in `leitung.json`, und
 | nein | nein | **ja** | **an** | Automatisch, mit Bedingung |
 | nein | nein | nein | **aus** | Niemand hat eingeschaltet |
 
-**Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und das
-Häkchen „Live-Leitung" im Tray-Menü schreiben es, `leitung an` und dasselbe
-Häkchen löschen es — und nichts sonst. (Bis v0.5.0 hing das am Linksklick auf
-das Symbol; der öffnet seit v0.5.3 wieder das Menü — seit v0.5.4 unser
-eigenes.) Wäre „aus" bloss ein gelöschtes `auto`, würde die nächste
+**Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus`, das
+Häkchen „Live-Leitung" im Tray-Menü und der **Linksklick** auf das Symbol
+schreiben es; `leitung an` und dieselben zwei Wege im Tray löschen es — und
+nichts sonst. (Am Linksklick hing das schon bis v0.5.0; von v0.5.3 bis v0.6.0
+öffnete er stattdessen ein Menü, seit v0.6.1 schaltet er wieder.) Wäre „aus"
+bloss ein gelöschtes `auto`, würde die nächste
 Auskunft von AI Brain es binnen einer Minute wieder setzen: ein Schalter, der
 sich selbst zurückstellt, ist kein Schalter. Und ein Veto mit Ablaufzeit ginge
 wieder an, wenn niemand hinsieht.
@@ -1040,19 +1041,24 @@ ohnehin, ob sie steht.
 
 #### Bedienung und Symbol
 
-- **Linksklick öffnet das Menü, ein zweiter Linksklick schließt es** — und
-  ein Klick daneben auch, die Leiste eingeschlossen. Dafür zeichnet der Tray
-  sein Menü unter Wayland **selbst** (siehe unten).
-- **Rechtsklick öffnet das Menü der Leiste**, mit denselben Punkten.
-- Die Leitung schaltet das **Häkchen „Live-Leitung"** im Menü, nicht der Klick
-  auf das Symbol.
+- **Linksklick schaltet die Live-Leitung** — an für 30 Minuten, oder aus.
+  Genau das, was das Häkchen im Menü tut; es gibt die Regel nur einmal
+  (`kern::schritt`). Ohne Antwort vom Harness schaltet er **nicht**: Ein Klick,
+  der im Zweifel das Gegenteil tut, wäre der nächste Ärger.
+- **Rechtsklick öffnet das Menü** — und es ist das einzige. Gezeigt wird es von
+  der Leiste, aus unserem DBusMenu.
 - **„AI Brain öffnen"** steht als Punkt im Menü: die Adresse der Instanz, mit
   der dieser Rechner verbunden ist. Ohne bekannte Adresse ist der Punkt
   ausgegraut — eine erfundene URL wäre schlimmer als ein Klick, der nichts tut.
-- Im Menü laufen **Pfeiltasten und Eingabe**, **Esc** schließt.
 
-**Fünf Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
-freigelegt (Stand 28.10.2026).**
+**Was unter Omarchy fehlt, und zwar benannt statt behauptet:** Ein zweiter
+Rechtsklick schließt die Karte der Leiste nicht, und Esc schließt sie auch
+nicht. Ein Klick daneben schließt sie. Warum das nicht an uns liegt, steht
+zwei Abschnitte weiter unten; gemeldet gehört es nach oben (Task #8958). Auf
+waybar, KDE, GNOME, macOS und Windows geht beides.
+
+**Sechs Fassungen hatte dieser Klick, und jede hat den nächsten Punkt
+freigelegt (Stand 29.10.2026).**
 
 1. **Gar nichts** (bis v0.4.1): `Activate` war nicht behandelt. In den meisten
    Leisten öffnet der *Rechtsklick* das Menü und der Linksklick löst
@@ -1073,30 +1079,48 @@ freigelegt (Stand 28.10.2026).**
    jetzt auf Klick AI-Brain auf, aber der sollte doch einfach nur das
    Tray-Menü aufmachen. Mit Linksklick."* Damit war der Klick richtig — und
    die Kehrseite aus Punkt 3 wieder da: Er schloss das Menü nicht.
+6. **Das eigene Menüfenster** (v0.5.4 bis v0.6.0), damit der zweite Klick es
+   schließt. Es schloss — und legte frei, dass es damit **zwei** Menüs über
+   dieselbe Sache gab: unser Fenster am Linksklick, das der Leiste am
+   Rechtsklick.
 
-**Jetzt (v0.5.4) zeichnet der Tray sein Menü selbst.** Bastian am 28.10.2026,
-wörtlich: *„Wenn ich links klicke außerhalb des Tray-Menüs drücke, muss es
-zugehen und wenn ich nochmal auf das Tray-Symbol klicke mit links klicken, muss
-es halt auch zugehen, wie ein Toggle auf Tray-Menü zu Tray-Menü."*
+**Jetzt (v0.6.1) schaltet der Linksklick, und es gibt wieder ein Menü.**
+Bastian am 29.10.2026, wörtlich: *„Es gibt jetzt ein Rechtsklick und ein
+Linksklick-Tray-Menü. Das macht ja keinen Sinn. … Sonst müssen wir linksklick
+Schalter machen, also dass man es damit anmacht und ausmacht, so wie es vorher
+war und rechtsklick öffnet das Menü, aber dann muss rechtsklick das Menü auch
+wieder schließen."*
 
-#### Warum die Leiste das nicht kann — und wir schon
+Die erste Hälfte steht so im Programm. Die zweite ist auf Omarchy nicht zu
+bauen, und das ist kein Vorsatz, sondern gemessen — siehe den nächsten
+Abschnitt. Weil der Linksklick dort der **einzige** Klick ist, der bei uns
+ankommt, schließen sich „links schaltet" und „unser Fenster bleibt
+erreichbar" aus: Das Menü muss erreichbar bleiben, also zeigt es die Leiste.
 
-In Omarchys Leiste (quickshell, Paket 4.0.4-1) **schließt ein zweiter
-Linksklick das Menü nicht**. Nachgelesen im Quelltext der Leiste selbst, am
-27. und 28.10.2026 — unverändert:
+> Dieselbe Falle wie in Fassung 3 und 6, nur eine Ebene höher: Jede Fassung
+> hat getan, was zuletzt gewünscht war, und dabei die nächste Kehrseite
+> freigelegt. Was sie *nicht* getan hat, ist beide Hälften der Bitte vorher
+> gegeneinander zu prüfen. Diese Fassung sagt deshalb von vornherein, was sie
+> **nicht** kann.
 
-- `plugins/bar/widgets/Tray.qml`: Ein Klick auf ein Item mit `onlyMenu`
-  (= `ItemIsMenu`) ruft `displayMenu()` → `openTrayMenu()`, und das endet
-  **immer** mit `trayMenuOpen = true`. Ein Umschalten gibt es nicht; `close()`
-  ist vorhanden, wird von dort aber nicht gerufen.
-- `Ui/PopupCard.qml`: Der Fokus-Griff (`HyprlandFocusGrab`) listet
-  `[popup, Leistenfenster]`. Ein Klick **auf** der Leiste klärt ihn deshalb
-  nie.
+#### Warum der Rechtsklick nicht bei uns ankommt (gemessen 29.10.2026)
 
-Und wir können der Leiste nicht helfen: **StatusNotifierItem kennt keinen Weg,
-dem Host „schließ mein Menü" zu sagen.** Das Menü ist sein Fenster, wir liefern
-über DBusMenu nur den Inhalt. In keiner Fassung der Spezifikation gibt es ein
-Signal dafür.
+Omarchy 4.0.4-1, quickshell 0.3.1 — nachgelesen im Quelltext der Leiste und im
+Programm selbst:
+
+| Frage | Befund |
+|---|---|
+| Wie meldet quickshell den Rechtsklick? | `plugins/bar/widgets/Tray.qml`, `MouseArea.onPressed` → `displayMenu()` → `openTrayMenu()`. Bieten wir ein DBusMenu an, endet das **immer** mit `trayMenuOpen = true` — die Karte der Leiste, ohne Umschalten. `close()` ist vorhanden, wird vom Klickpfad nie gerufen |
+| Und wenn wir keins anbieten? | `openTrayMenu` nimmt den Zweig `!item.menu` und ruft `item.display(…)`. Das endet in quickshell mit `qCritical "No menu present for"`: es passiert **nichts** |
+| Ruft quickshell `ContextMenu`? | **Nie.** Im Programm gibt es genau eine Fundstelle der Zeichenkette, und die liegt im `qt_static_metacall` des erzeugten DBus-Stellvertreters. Die QML-Schnittstelle (`quickshell-service-statusnotifier.qmltypes`) kennt nur `activate`, `secondaryActivate`, `scroll` und `display` — kein `contextMenu` |
+| Könnte ein spec-treuer Host uns erreichen? | Heute nicht: `ksni` 0.3.7 beantwortet `ContextMenu` selbst mit `UnknownMethod` und gibt die Eigenschaft `Menu` fest als `/MenuBar` heraus. „Kein DBusMenu anbieten" geht damit gar nicht |
+| Schließt ein Klick daneben? | Ja. `Ui/PopupCard.qml` hat einen `HyprlandFocusGrab` über `[Karte, Leistenfenster]` — alles außerhalb löst ihn und schließt. Ein Klick **auf** der Leiste nicht, und eine Tastenbehandlung gibt es dort nicht, also auch kein Esc |
+
+**Zwei Folgen, und sie hängen zusammen.** Dass die Karte beim zweiten
+Rechtsklick nicht zugeht, können wir nicht beheben: StatusNotifierItem kennt
+keinen Weg, dem Host „schließ mein Menü" zu sagen — das Menü ist sein Fenster,
+wir liefern über DBusMenu nur den Inhalt. Und dass unser eigenes Fenster nicht
+an den Rechtsklick kann, liegt daran, dass dieser Klick die Leiste nie verlässt.
 
 Geprüft und verworfen wurden außerdem:
 
@@ -1105,12 +1129,21 @@ Geprüft und verworfen wurden außerdem:
 | Eine Option in Omarchy/quickshell | Es gibt keine. `~/.config/omarchy/shell.json` kennt zum Tray nur Layout, `pinned` und `hidden` |
 | Die drei Zeilen in `Tray.qml` ändern | Eine Paketdatei, beim nächsten `omarchy`-Update weg. Gehört nach oben gemeldet, nicht hierher kopiert |
 | Item abmelden und neu anmelden | Symbol flackert, Leiste sieht einen Verbindungsabbruch. Tauscht den Fehler gegen einen schlimmeren |
+| Eine eigene Fläche dauerhaft über dem Symbol | Wo das Symbol liegt, wissen wir nicht verlässlich — der Bereich fährt ein und aus, Symbole kommen und gehen. Und sie würde Hover und Tooltip der Leiste schlucken |
+| Ein leeres DBusMenu anbieten | Die Karte geht trotzdem auf: `fittedContentHeight` setzt den Innenabstand als Untergrenze, es erscheint ein leerer Kasten von etwa 232×20 px |
+| Bei `AboutToShow` einen Auffänger aufziehen | Er läge **über** der Karte und würde deren Zeilen schlucken. Nur die Leistenzeile abzudecken wäre denkbar — vorgemerkt, nicht gebaut, weil es daran hängt, wie Hyprland den Fokus-Griff löst |
 
-#### Das eigene Menüfenster (Linux/Wayland)
+#### Das eigene Menüfenster (Linux/Wayland) — seit v0.6.1 der Rückweg
+
+Von v0.5.4 bis v0.6.0 war das die Vorgabe; jetzt steht es unter
+`AI_BRAIN_TRAY_MENUE=eigen`. Gelöscht ist es nicht: Es ist der Weg, der an
+diesem Klick alles kann, was gewünscht war — nur eben am **linken**. Wer es
+setzt, bekommt zum Preis des Schalters zwei Menüs zurück (unser Fenster links,
+das der Leiste rechts).
 
 `ItemIsMenu` steht seit v0.5.4 auf `false`, der Linksklick kommt also als
-`Activate` an — und dann spannt der Tray **zwei** Arten von Flächen auf
-(`zwlr_layer_shell_v1`, Ebene `Overlay`):
+`Activate` an — und in dieser Betriebsart spannt der Tray dann **zwei** Arten
+von Flächen auf (`zwlr_layer_shell_v1`, Ebene `Overlay`):
 
 | Fläche | Größe | Wozu |
 |---|---|---|
@@ -1130,6 +1163,10 @@ Gezeichnet wird in reinem Rust: `wayland-client` ohne `libwayland`,
 `fontdue` für die Buchstaben, kein GTK, kein `libxkbcommon`.
 
 #### Es sieht aus wie Omarchys Menü, weil es dieselben Zahlen liest (v0.5.6)
+
+Dieser Abschnitt gilt für das **eigene** Fenster, also für
+`AI_BRAIN_TRAY_MENUE=eigen`. In der Vorgabe seit v0.6.1 zeigt die Leiste ihre
+eigene Karte — die sieht aus wie Omarchys Menü, weil sie es *ist*.
 
 Bis v0.5.5 nahm das Fenster *ungefähr* die Farben des Themes und sonst eigene
 Masse. Seit v0.5.6 liest es die Zahlen, die Omarchys Tray-Menü selbst
@@ -1195,10 +1232,20 @@ Sitzung (CI) sonst niemand sie beantworten kann.
 `AI_BRAIN_TRAY_MENUE_SKALIERUNG` und `AI_BRAIN_TRAY_MENUE_HERVOR` stellen
 Skalierung und hervorgehobene Zeile ein.
 
-**Wo es das nicht gibt, bleibt alles wie vorher.** Der Tray sieht beim Start
-nach, ob `zwlr_layer_shell_v1` da ist; unter GNOME, KDE und X11 ist es das
-nicht, und dort öffnet weiter die Leiste das Menü (`ItemIsMenu = true`).
-`AI_BRAIN_TRAY_MENUE=eigen` bzw. `=leiste` legt es von Hand fest,
+**Seit v0.6.1 wird beim Start nicht mehr nach layer-shell gesehen** — die
+Vorgabe braucht keins, und eine Messung, an der nichts hängt, ist eine Zeile,
+die veralten kann. Nur `eigen` braucht es; fehlt es dort, schaltet der
+Linksklick und das Programm schreibt den Grund ins Protokoll statt einen
+Klick, der nichts tut.
+
+`AI_BRAIN_TRAY_MENUE` legt die Bedienung von Hand fest:
+
+| Wert | Linksklick | Rechtsklick |
+|---|---|---|
+| `schalter`, oder nichts | Live-Leitung an (30 min) / aus | **das** Menü, von der Leiste gezeigt |
+| `eigen` | unser Menüfenster auf und zu | Menü der Leiste — also zwei |
+| `leiste` | Menü der Leiste | Menü der Leiste |
+
 `AI_BRAIN_TRAY_MENUE_LAUT=1` schreibt jedes Wayland-Ereignis nach stderr.
 
 #### Omarchy: das Symbol anpinnen, sonst fährt der Bereich ein
@@ -1210,7 +1257,9 @@ Bereich hinter sich einfahren — bei jedem Tray-Programm gleich, auch bei
 Omarchys eigenem Menü.
 
 **Von unserer Seite ist daran nichts zu machen**, und diesmal ist der Satz
-belegt statt behauptet: Solange unser Menü offen ist, leitet Hyprland alle
+belegt statt behauptet. Für die Karte der Leiste (Vorgabe seit v0.6.1) liegt
+es ohnehin ganz bei ihr. Und für unser eigenes Fenster
+(`AI_BRAIN_TRAY_MENUE=eigen`): Solange es offen ist, leitet Hyprland alle
 Zeigerereignisse auf unsere Fläche um — die Leiste sieht also keinen Hover
 mehr, ob wir sie überdecken oder nicht. Sie auszusparen würde ausserdem den
 Klick auf die Leiste als Weg zum Schliessen kosten.
@@ -1260,12 +1309,15 @@ Zwei weitere Punkte aus derselben Messung:
 
 #### Die Konvention je Plattform
 
-| | Linksklick | Warum |
-|---|---|---|
-| Linux, Wayland mit layer-shell | **eigenes Menü, Klick schaltet um** | Bastians Wunsch, und der einzige Weg dorthin |
-| Linux, sonst | Menü der Leiste | `ItemIsMenu`; so machen es GNOME und KDE |
-| macOS | Menü | **die Norm.** Ein `NSStatusItem` mit Menü zeigt es bei jedem Klick, und ein zweiter Klick schließt es; für Menüleisten-Extras gibt es keine zweite Gestik |
-| Windows | Menü | **bewusste Abweichung.** Im Infobereich wäre der Linksklick die Standardaktion. Dieser Tray hat aber kein Hauptfenster, das eine Standardaktion öffnen könnte — und der Rechtsklick führt zum selben Menü, es geht also keine Gewohnheit verloren |
+Seit v0.6.1 ist sie auf allen drei Leisten **dieselbe**: links schalten,
+rechts das Menü. Das war vorher nicht so, und es war jedes Mal begründet —
+genau das ist der Punkt.
+
+| | Linksklick | Rechtsklick | Warum |
+|---|---|---|---|
+| Linux | **Live-Leitung an/aus** | das Menü, von der Leiste gezeigt | Der einzige Klick, der bei uns ankommt, ist der linke; also schaltet er, und das Menü bleibt dort, wo es ohnehin aufgeht |
+| macOS | **Live-Leitung an/aus** | das Menü | **bewusste Abweichung.** Ein `NSStatusItem` mit Menü zeigt es üblicherweise bei jedem Klick; für Menüleisten-Extras gibt es keine zweite Gestik. Ein Tray, der sich je Leiste anders bedienen lässt, sind aber drei Trays — und das Menü bleibt über den Rechtsklick vollständig erreichbar, samt Zugehen |
+| Windows | **Live-Leitung an/aus** | das Menü | **jetzt die Norm.** Der Infobereich trennt Linksklick (Standardaktion) von Rechtsklick (Kontextmenü), und die Standardaktion dieses Trays ist das Schalten. Von v0.5.3 bis v0.6.0 wichen wir hier ab |
 
 > Dass eine Begründung technisch richtig ist, heißt nicht, dass das Ergebnis
 > stimmt — und dass eine Rückfrage beantwortet wurde, heißt nicht, dass die
@@ -1273,6 +1325,13 @@ Zwei weitere Punkte aus derselben Messung:
 > eine Fassung gekostet. Und „auf unserer Seite nicht umgehbar" galt für den
 > Weg, den wir gegangen waren, nicht für die Aufgabe: Das Menü selbst zu
 > zeichnen stand die ganze Zeit offen.
+>
+> Die sechste Fassung hat eine eigene Lehre, und sie zeigt in die andere
+> Richtung: **Eine Bitte kann zwei Hälften haben, die sich ausschließen.**
+> „Links schalten" und „rechts unser Menü" waren einzeln beide machbar und
+> zusammen nicht, weil auf Omarchy nur ein Klick bei uns ankommt. Wer erst
+> baut und dann merkt, liefert die halbe Bitte und nennt es fertig. Deshalb
+> steht hier, was diese Fassung **nicht** kann, bevor jemand es sucht.
 
 Das Symbol wird **selbst gezeichnet** und nennt keinen Theme-Symbolnamen. Mit
 `network-*` aus dem Theme kam es auf einer dunklen Leiste als dunkel auf dunkel

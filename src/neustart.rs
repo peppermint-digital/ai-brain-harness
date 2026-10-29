@@ -41,6 +41,14 @@
 //! Lokal ausgeführt war es von Anfang an richtig; **genau deshalb ist es hier
 //! nicht aufgefallen.**
 //!
+//! > **Nachtrag 29.10.2026 (v0.6.1, #9060):** Die Messung oben steht
+//! > unverändert, ihr Symptom gibt es aber nicht mehr. Seit v0.6.1 schaltet
+//! > der Linksklick die Leitung und das Menü kommt von der Leiste; dafür
+//! > braucht es kein layer-shell, also wird beim Start auch nicht mehr danach
+//! > gesehen. `ItemIsMenu` hängt damit nicht länger an der Wayland-Umgebung.
+//! > Die **Regel** darunter gilt weiter, und zwar unabhängig vom Tray: Wer
+//! > einen Prozess ersetzt, stellt ihn so wieder hin, wie er stand.
+//!
 //! > **Ein Prozess zu ersetzen heisst nicht, ihn neu zu starten — es heisst,
 //! > ihn so wieder hinzustellen, wie er stand.** Dazu gehört seine Umgebung.
 //!

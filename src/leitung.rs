@@ -172,11 +172,12 @@ impl Stand {
 /// | nein | nein | ja | [`Stand::Automatisch`] — AN |
 /// | nein | nein | nein | [`Stand::Aus`] |
 ///
-/// **Das Veto steht ganz oben, und es hat keine Frist.** `leitung aus` und das
-/// Häkchen „Live-Leitung" im Tray-Menü schreiben es (bis v0.5.0 war es der
-/// Linksklick auf das Symbol; der öffnet seit #1124 das Menü). Wäre es nur ein
-/// gelöschtes `auto`, würde die nächste Auskunft von AI Brain es binnen einer
-/// Minute wieder setzen —
+/// **Das Veto steht ganz oben, und es hat keine Frist.** Geschrieben wird es
+/// von `leitung aus`, vom Häkchen „Live-Leitung" im Tray-Menü — und seit
+/// v0.6.1 (#9060) wieder vom **Linksklick** auf das Symbol, der dasselbe tut
+/// wie das Häkchen. Von v0.5.0 bis v0.6.0 öffnete der Klick nur ein Menü.
+/// Wäre es nur ein gelöschtes `auto`, würde die nächste Auskunft von AI Brain
+/// es binnen einer Minute wieder setzen —
 /// ein Schalter, der sich selbst zurückstellt, ist kein Schalter. Und ein
 /// Veto mit Ablaufzeit ginge wieder an, wenn niemand hinsieht; wer wieder
 /// mitlesen lassen will, schaltet ein, und das ist ein Klick.

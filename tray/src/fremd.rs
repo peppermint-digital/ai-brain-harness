@@ -33,7 +33,7 @@ use std::sync::mpsc;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::ansicht::Ansicht;
 use crate::harness;
@@ -63,6 +63,14 @@ enum Nachricht {
     /// Signal, das hier verschluckt wird, wäre ein Menüpunkt, der nichts tut.
     /// Genau der Fehler, mit dem Bug #1124 angefangen hat.
     Gewaehlt(Aktion),
+    /// Linksklick auf das Symbol selbst (#9060).
+    ///
+    /// Gibt es wieder, seit der Linksklick die Leitung schaltet statt ein
+    /// Menü zu öffnen. Von v0.5.3 bis v0.6.0 war dieser Weg abgeschaltet:
+    /// Damals öffnete die Leiste am Linksklick ihr Menü und meldete den
+    /// Klick **trotzdem** — beides zu behandeln hiesse, etwas zu tun,
+    /// während sich darüber ein Menü aufmacht.
+    Symbolklick,
     Ende,
 }
 
@@ -191,10 +199,31 @@ pub fn starten() -> Result<(), String> {
         let _ = bote_menue.send_event(Nachricht::Menue(e.id));
     }));
 
-    // Kein `TrayIconEvent`-Handler mehr (bis v0.5.2 hing dort der Linksklick
-    // auf „AI Brain öffnen"). Die Leiste zeigt das Menü jetzt selbst, und
-    // `tray-icon` meldet den Klick **trotzdem** — beides zu behandeln hiesse,
-    // ein Fenster aufzumachen, während sich darüber ein Menü öffnet.
+    // Der Linksklick auf das Symbol (#9060, v0.6.1). Die Leiste zeigt das
+    // Menü nur noch am **Rechtsklick** (`with_menu_on_left_click(false)`
+    // unten), der Linksklick kommt hier an und schaltet.
+    //
+    // Nur `Up`, und nur `Left`: Beide Leisten melden `Down` **und** `Up`
+    // (macOS `platform_impl/macos/mod.rs`, Windows ebenso), und ein Klick,
+    // der zweimal schaltet, schaltet gar nicht. Genommen wird das Loslassen —
+    // das ist überall das abgeschlossene Klicken.
+    //
+    // Der Rechtsklick wird hier NICHT behandelt: Er öffnet das Menü der
+    // Leiste, und das macht `tray-icon` selbst. Täten wir daneben noch etwas,
+    // liefe es gegen ein sich öffnendes Menü — genau der Grund, aus dem
+    // dieser Handler von v0.5.3 bis v0.6.0 gar nicht da war.
+    let bote_klick = bote.clone();
+
+    TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
+        if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } = e
+        {
+            let _ = bote_klick.send_event(Nachricht::Symbolklick);
+        }
+    }));
 
     let (signal, geweckt) = mpsc::channel();
     let bote_signal = bote.clone();
@@ -239,27 +268,37 @@ pub fn starten() -> Result<(), String> {
                 match TrayIconBuilder::new()
                     .with_tooltip(a.kurz())
                     .with_menu(Box::new(menu))
-                    // Linksklick öffnet das Menü — wie unter Linux
-                    // (#1124, Bastians Wunsch vom 28.10.2026).
+                    // Das Menü nur am Rechtsklick; links schaltet die
+                    // Leitung (#9060, Bastians Ansage vom 29.10.2026).
+                    //
+                    // `menu_on_right_click` bleibt bei seiner Vorgabe `true`,
+                    // steht also bewusst nicht da: Weniger Zeilen, und die
+                    // Vorgabe ist genau das Gewollte.
                     //
                     // ## Die Konvention, je Plattform
                     //
-                    // **macOS:** genau so. Ein `NSStatusItem` mit Menü zeigt
-                    // es bei jedem Klick; Apples Richtlinien kennen für
-                    // Menüleisten-Extras keine zweite Gestik. `true` ist hier
-                    // also nicht nur Bastians Wunsch, sondern die Norm — und
-                    // `false` war seit v0.5.1 der Ausreisser.
+                    // **Windows:** jetzt die Norm. Der Infobereich trennt
+                    // Linksklick (Standardaktion) von Rechtsklick
+                    // (Kontextmenü), und die Standardaktion dieses Trays ist
+                    // das Schalten der Leitung — ein Hauptfenster, das er
+                    // öffnen könnte, hat er nicht, die Anwendung liegt im
+                    // Browser. Von v0.5.3 bis v0.6.0 wichen wir hier
+                    // bewusst ab; das ist jetzt nicht mehr nötig.
                     //
-                    // **Windows:** dort ist die Norm eine andere. Der
-                    // Infobereich trennt Linksklick (Standardaktion, meist
-                    // das Hauptfenster) von Rechtsklick (Kontextmenü). Wir
-                    // weichen bewusst ab, aus zwei Gründen: Dieser Tray hat
-                    // **kein Hauptfenster**, das eine Standardaktion öffnen
-                    // könnte — die Anwendung liegt im Browser —, und ein
-                    // Tray, der sich je Leiste anders bedienen lässt, ist
-                    // drei Trays. Der Rechtsklick führt zum selben Menü, es
-                    // geht also keine Gewohnheit verloren.
-                    .with_menu_on_left_click(true)
+                    // **macOS:** hier ist es umgekehrt eine Abweichung. Ein
+                    // `NSStatusItem` mit Menü zeigt es üblicherweise bei
+                    // jedem Klick; Apples Richtlinien kennen für
+                    // Menüleisten-Extras keine zweite Gestik. Wir weichen ab,
+                    // weil ein Tray, der sich je Leiste anders bedienen
+                    // lässt, drei Trays sind — und weil das Menü über den
+                    // Rechtsklick vollständig erreichbar bleibt, inklusive
+                    // Zugehen beim zweiten Klick.
+                    //
+                    // Auf beiden Plattformen ist Bastians Bitte damit
+                    // **vollständig** erfüllt, anders als unter Omarchy:
+                    // Dort kann die Leiste ihr Menü nicht wieder schliessen.
+                    // Die Messung dazu steht in `linux.rs`.
+                    .with_menu_on_left_click(false)
                     .build()
                 {
                     Ok(t) => {
@@ -294,6 +333,11 @@ pub fn starten() -> Result<(), String> {
             }
 
             Event::UserEvent(Nachricht::Gewaehlt(aktion)) => kern.tun(&aktion),
+
+            // Was dabei entschieden wird — und dass ohne Antwort NICHT
+            // geschaltet wird —, steht in `Kern::umschalten` und
+            // `kern::schritt`; dasselbe tut das Häkchen im Menü.
+            Event::UserEvent(Nachricht::Symbolklick) => kern.umschalten(),
 
             Event::UserEvent(Nachricht::Takt) => {
                 kern.wissen = harness::abfragen();
