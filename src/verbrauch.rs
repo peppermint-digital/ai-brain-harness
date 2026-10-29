@@ -457,6 +457,198 @@ pub fn codex_sitzungen() -> Vec<Sitzung> {
 }
 
 // ---------------------------------------------------------------------------
+// Konto-Merkzettel
+// ---------------------------------------------------------------------------
+
+fn konten_pfad() -> Result<PathBuf, String> {
+    Ok(config::config_dir()?.join("verbrauch-konten.json"))
+}
+
+/// Welches Konto gehoert zu welcher Sitzung?
+///
+/// ## Warum es diesen Merkzettel braucht
+///
+/// Alle imkr-Konten teilen dasselbe Transcript-Verzeichnis
+/// (`~/.claude/projects` ist in jeden Kontoordner hineingelinkt). Aus einer
+/// Protokolldatei allein ist deshalb nicht ableitbar, unter welchem Konto die
+/// Sitzung lief — und das aktuelle Konto auf alle zu stempeln war am
+/// 16.10.2026 schon einmal falsch: 2066 historische Sitzungen bekamen
+/// „henneberg", obwohl ein Teil unter `department` lief. Siehe {@link konto}.
+///
+/// Der Merkzettel loest das, ohne zu raten: Jede Zeile stammt aus einer
+/// MESSUNG — entweder aus dem Hook (dort ist `CLAUDE_CONFIG_DIR` die Wahrheit
+/// ueber DIESE Sitzung) oder aus den Kontoordnern selbst
+/// ({@link konten_aus_kontoordnern}).
+///
+/// Dass der Merkzettel bleibt, ist der halbe Zweck: `lastSessionId` kennt je
+/// Projekt nur die JUENGSTE Sitzung. Was heute dort steht, ist morgen
+/// ueberschrieben. Jeder Lauf legt den heutigen Stand dazu, und damit waechst
+/// die Abdeckung, statt mit jedem Lauf von vorn zu beginnen.
+fn konten_laden() -> BTreeMap<String, String> {
+    let Ok(pfad) = konten_pfad() else {
+        return BTreeMap::new();
+    };
+
+    let Ok(text) = std::fs::read_to_string(&pfad) else {
+        return BTreeMap::new();
+    };
+
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn konten_schreiben(konten: &BTreeMap<String, String>) -> Result<(), String> {
+    let pfad = konten_pfad()?;
+
+    if let Some(ordner) = pfad.parent() {
+        std::fs::create_dir_all(ordner)
+            .map_err(|e| format!("{} ist nicht anlegbar: {e}", ordner.display()))?;
+    }
+
+    let text = serde_json::to_string_pretty(konten)
+        .map_err(|e| format!("Konto-Merkzettel ist nicht schreibbar: {e}"))?;
+
+    std::fs::write(&pfad, format!("{text}\n"))
+        .map_err(|e| format!("{} ist nicht schreibbar: {e}", pfad.display()))
+}
+
+/// Die Kontoordner von Claude Code auf diesem Rechner.
+///
+/// Der Standardordner gehoert ausdruecklich dazu. Auf der codingmachine ist
+/// `~/.claude` nicht „kein Konto", sondern ein angemeldetes — und es war der
+/// groesste blinde Fleck der Auswertung: 57 Sitzungen mit 28 M Ausgabe-Token
+/// in sieben Tagen, keiner Person und keinem Konto zugeordnet.
+fn kontoordner(heim: &Path) -> Vec<PathBuf> {
+    let mut ordner = vec![heim.join(".claude")];
+
+    let imkr = heim.join(".local/state/imkr/accounts/claude");
+
+    if let Ok(eintraege) = std::fs::read_dir(&imkr) {
+        let mut weitere: Vec<PathBuf> = eintraege
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        weitere.sort();
+        ordner.extend(weitere);
+    }
+
+    ordner
+}
+
+/// Wie das Konto eines Ordners heisst — aus der Anmeldung, nicht aus dem Pfad.
+///
+/// `oauthAccount.emailAddress` in `.claude.json` nennt, wer angemeldet ist.
+/// Der Teil vor dem `@` ist genau der Name, den `imkr` fuehrt
+/// (`henneberg@…` → `henneberg`) — und er stimmt auch fuer den
+/// Standardordner, der keinen Kontonamen im Pfad hat.
+///
+/// Bewusst nicht der Ordnername: Der stimmt bei imkr-Ordnern zufaellig und beim
+/// Standardordner gar nicht (`.claude` ist kein Konto).
+fn konto_des_ordners(ordner: &Path) -> Option<String> {
+    let daten = kontodatei(ordner)?;
+
+    let adresse = daten
+        .get("oauthAccount")?
+        .get("emailAddress")?
+        .as_str()?
+        .trim()
+        .to_lowercase();
+
+    let name = adresse.split('@').next()?.trim().to_string();
+
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Die `.claude.json` eines Kontoordners — und sie liegt an ZWEI Orten.
+///
+/// Bei einem imkr-Kontoordner (`CLAUDE_CONFIG_DIR` gesetzt) liegt sie IM Ordner:
+/// `…/accounts/claude/henneberg/.claude.json`. Beim Standardordner `~/.claude`
+/// liegt sie DANEBEN: `~/.claude.json`.
+///
+/// Am 29.10.2026 genau daran gescheitert: Der Merkzettel suchte nur im Ordner
+/// und fand das Standardkonto nicht — also ausgerechnet das, das den groessten
+/// blinden Fleck ausmacht (auf der codingmachine ist `~/.claude` bei stelljes
+/// angemeldet, mit 2798 Verbrauchszeilen ohne Zuordnung). Die Funktion sah
+/// richtig aus, weil sie fuer die imkr-Ordner stimmte.
+fn kontodatei(ordner: &Path) -> Option<serde_json::Value> {
+    let mut orte = vec![ordner.join(".claude.json")];
+
+    // `~/.claude` → `~/.claude.json`. Aus dem Ordner selbst abgeleitet, nicht
+    // aus HOME: so stimmt es auch fuer einen Testordner.
+    if let (Some(name), Some(eltern)) = (
+        ordner.file_name().and_then(|n| n.to_str()),
+        ordner.parent(),
+    ) {
+        orte.push(eltern.join(format!("{name}.json")));
+    }
+
+    for ort in orte {
+        if let Ok(text) = std::fs::read_to_string(&ort) {
+            if let Ok(daten) = serde_json::from_str::<serde_json::Value>(&text) {
+                return Some(daten);
+            }
+        }
+    }
+
+    None
+}
+
+/// Sitzung → Konto, gelesen aus den Kontoordnern.
+///
+/// Claude Code haelt je Projekt die juengste Sitzung in
+/// `projects.<pfad>.lastSessionId` — und zwar im Ordner des Kontos, unter dem
+/// sie lief. Das ist der einzige Ort, an dem die Zuordnung nach dem Lauf noch
+/// steht.
+///
+/// **Taucht eine Sitzung unter ZWEI Konten auf, wird sie weggelassen.** Das
+/// sollte nicht vorkommen; wenn doch, ist die Zuordnung unklar, und eine
+/// unklare gehoert nicht in eine Auswertung. Eine Luecke sieht man, eine
+/// falsche Zuordnung nicht.
+fn konten_aus_kontoordnern(heim: &Path) -> BTreeMap<String, String> {
+    let mut gefunden: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for ordner in kontoordner(heim) {
+        let Some(konto) = konto_des_ordners(&ordner) else {
+            continue;
+        };
+
+        let Some(daten) = kontodatei(&ordner) else {
+            continue;
+        };
+
+        let Some(projekte) = daten.get("projects").and_then(|p| p.as_object()) else {
+            continue;
+        };
+
+        for (_pfad, eintrag) in projekte {
+            if let Some(sitzung) = eintrag.get("lastSessionId").and_then(|s| s.as_str()) {
+                if !sitzung.trim().is_empty() {
+                    gefunden
+                        .entry(format!("claude:{}", sitzung.trim()))
+                        .or_default()
+                        .insert(konto.clone());
+                }
+            }
+        }
+    }
+
+    gefunden
+        .into_iter()
+        .filter_map(|(schluessel, konten)| {
+            if konten.len() == 1 {
+                konten.into_iter().next().map(|k| (schluessel, k))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Melden
 // ---------------------------------------------------------------------------
 
@@ -757,7 +949,14 @@ fn konto(args: &[String], gemeinte: Option<&str>) -> Option<String> {
     let name = crate::konto::aktuelles(&BTreeMap::new());
 
     if name == "Standard" {
-        return None;
+        // „Standard" heisst nur, dass kein Kontoordner im Pfad steht — nicht,
+        // dass niemand angemeldet ist. Auf der codingmachine ist `~/.claude`
+        // ein angemeldetes Konto (stelljes), und es war der groesste blinde
+        // Fleck der Auswertung: 57 Sitzungen mit 28 M Ausgabe-Token in sieben
+        // Tagen ohne jede Zuordnung. Die Anmeldung selbst sagt, wer es ist.
+        let ordner = crate::konto::konfigurationsordner(&BTreeMap::new())?;
+
+        return konto_des_ordners(Path::new(&ordner));
     }
 
     // `claude:henneberg` → `henneberg`. Das Werkzeug steht schon in einem
@@ -888,6 +1087,36 @@ fn melden(args: &[String]) -> Result<(), String> {
     let deckel = grenze(args);
     let konto = konto(args, gemeint.as_deref());
 
+    // Der Merkzettel wird bei JEDEM Lauf aus den Kontoordnern ergaenzt — auch
+    // wenn gerade nichts zu melden ist. `lastSessionId` kennt je Projekt nur
+    // die juengste Sitzung; was heute dort steht, ist morgen ueberschrieben.
+    // Wer erst beim Melden nachsieht, verliert genau die Zuordnungen, die
+    // zwischen zwei Meldungen entstanden sind.
+    let mut konten = konten_laden();
+    let vorher = konten.len();
+
+    if let Ok(heim) = std::env::var("HOME") {
+        for (schluessel, name) in konten_aus_kontoordnern(Path::new(&heim)) {
+            // Ein aus dem Hook gemerkter Eintrag bleibt stehen: Dort war
+            // `CLAUDE_CONFIG_DIR` die Wahrheit ueber DIESE Sitzung, waehrend
+            // `lastSessionId` nur sagt, welche Sitzung zuletzt lief.
+            konten.entry(schluessel).or_insert(name);
+        }
+    }
+
+    // Was der Hook weiss, gehoert in den Merkzettel — sonst ist es nach dem
+    // Lauf weg, und ein spaeterer Nachtrag derselben Sitzung stuende wieder
+    // ohne Konto da.
+    if let (Some(kennung), Some(name)) = (gemeint.as_deref(), konto.as_deref()) {
+        for s in alle.iter().filter(|s| s.kennung == kennung) {
+            konten.insert(s.schluessel(), name.to_string());
+        }
+    }
+
+    if konten.len() != vorher {
+        let _ = konten_schreiben(&konten);
+    }
+
     if offen.is_empty() {
         if !args.iter().any(|a| a == "--still") {
             println!("Nichts Neues — {} Sitzungen, alle schon gemeldet.", alle.len());
@@ -901,11 +1130,20 @@ fn melden(args: &[String]) -> Result<(), String> {
     let mut fehler: Vec<String> = Vec::new();
 
     for s in offen.iter().take(deckel) {
+        // Das Konto DIESER Sitzung, nicht das des Laufs. Ein nachholender Lauf
+        // meldet viele Sitzungen aus verschiedenen Konten; `konto` ist nur
+        // gesetzt, wenn eine bestimmte gemeint ist (Hook). Sonst zaehlt der
+        // Merkzettel — und wenn der sie nicht kennt, bleibt es leer. Eine
+        // Luecke sieht man, eine falsche Zuordnung nicht.
+        let kennung = konto
+            .clone()
+            .or_else(|| konten.get(&s.schluessel()).cloned());
+
         let antwort = crate::mcp::call_tool_text(
             &verbindung,
             &token,
             "report-usage-tool",
-            nutzlast(s, konto.as_deref()),
+            nutzlast(s, kennung.as_deref()),
         );
 
         match antwort {
@@ -964,6 +1202,174 @@ mod tests {
         std::fs::write(&pfad, inhalt).expect("Testdatei");
 
         pfad
+    }
+
+    /// Ein Kontoordner, wie Claude Code ihn hinterlaesst.
+    fn kontoordner_bauen(heim: &Path, pfad: &str, adresse: &str, sitzungen: &[(&str, &str)]) {
+        let ordner = heim.join(pfad);
+        std::fs::create_dir_all(&ordner).expect("Kontoordner");
+
+        let projekte: serde_json::Map<String, serde_json::Value> = sitzungen
+            .iter()
+            .map(|(projekt, sitzung)| {
+                (
+                    (*projekt).to_string(),
+                    serde_json::json!({ "lastSessionId": sitzung }),
+                )
+            })
+            .collect();
+
+        let inhalt = serde_json::json!({
+            "oauthAccount": { "emailAddress": adresse },
+            "projects": projekte,
+        });
+
+        // Beim Standardordner liegt die Datei DANEBEN (`~/.claude.json`), bei
+        // einem imkr-Kontoordner DRIN. Der Helfer macht es genauso, sonst
+        // prueft der Test eine Welt, die es nicht gibt.
+        let ziel = if pfad == ".claude" {
+            heim.join(".claude.json")
+        } else {
+            ordner.join(".claude.json")
+        };
+
+        std::fs::write(ziel, serde_json::to_string(&inhalt).expect("JSON")).expect("claude.json");
+    }
+
+    fn wegwerf_heim(name: &str) -> PathBuf {
+        let heim = std::env::temp_dir().join(format!(
+            "verbrauch-heim-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&heim);
+        std::fs::create_dir_all(&heim).expect("Heimverzeichnis");
+
+        heim
+    }
+
+    // -- Konto-Merkzettel ----------------------------------------------------
+
+    #[test]
+    fn das_konto_kommt_aus_der_anmeldung_und_nicht_aus_dem_ordnernamen() {
+        // Der Ordner heisst `.claude` und ist trotzdem ein Konto. Genau das war
+        // der groesste blinde Fleck: Auf der codingmachine ist der
+        // Standardordner bei stelljes angemeldet, und 57 Sitzungen mit 28 M
+        // Ausgabe-Token lagen deshalb ohne jede Zuordnung in der Auswertung.
+        let heim = wegwerf_heim("anmeldung");
+        kontoordner_bauen(&heim, ".claude", "stelljes@peppermint-digital.de", &[]);
+
+        assert_eq!(
+            konto_des_ordners(&heim.join(".claude")).as_deref(),
+            Some("stelljes")
+        );
+    }
+
+    #[test]
+    fn die_datei_des_standardkontos_liegt_neben_dem_ordner() {
+        // DER FEHLER vom 29.10.2026. Der Merkzettel suchte nur
+        // `~/.claude/.claude.json` — die gibt es nicht. Die Datei des
+        // Standardkontos liegt in `~/.claude.json`. Damit fehlte ausgerechnet
+        // das Konto mit den meisten unzugeordneten Zeilen (2798).
+        let heim = wegwerf_heim("daneben");
+        std::fs::create_dir_all(heim.join(".claude")).expect("Ordner");
+        std::fs::write(
+            heim.join(".claude.json"),
+            serde_json::to_string(&serde_json::json!({
+                "oauthAccount": { "emailAddress": "stelljes@peppermint-digital.de" },
+                "projects": { "-home-x-a": { "lastSessionId": "sitzung-standard" } },
+            }))
+            .expect("JSON"),
+        )
+        .expect("Datei");
+
+        assert_eq!(
+            konto_des_ordners(&heim.join(".claude")).as_deref(),
+            Some("stelljes"),
+            "die Datei neben dem Ordner wird nicht gelesen"
+        );
+        assert_eq!(
+            konten_aus_kontoordnern(&heim)
+                .get("claude:sitzung-standard")
+                .map(String::as_str),
+            Some("stelljes")
+        );
+    }
+
+    #[test]
+    fn der_standardordner_zaehlt_mit() {
+        let heim = wegwerf_heim("standardordner");
+        kontoordner_bauen(&heim, ".claude", "stelljes@peppermint-digital.de", &[]);
+        kontoordner_bauen(
+            &heim,
+            ".local/state/imkr/accounts/claude/department",
+            "department@peppermint-digital.de",
+            &[],
+        );
+
+        let ordner = kontoordner(&heim);
+
+        assert!(ordner.contains(&heim.join(".claude")), "Standardordner fehlt");
+        assert!(ordner
+            .contains(&heim.join(".local/state/imkr/accounts/claude/department")));
+    }
+
+    #[test]
+    fn sitzungen_werden_ihrem_konto_zugeordnet() {
+        let heim = wegwerf_heim("zuordnung");
+        kontoordner_bauen(
+            &heim,
+            ".local/state/imkr/accounts/claude/department",
+            "department@peppermint-digital.de",
+            &[("-home-x-verwaltung", "sitzung-dep")],
+        );
+        kontoordner_bauen(
+            &heim,
+            ".local/state/imkr/accounts/claude/henneberg",
+            "henneberg@peppermint-digital.de",
+            &[("-home-x-ai-brain", "sitzung-hen")],
+        );
+
+        let konten = konten_aus_kontoordnern(&heim);
+
+        assert_eq!(konten.get("claude:sitzung-dep").map(String::as_str), Some("department"));
+        assert_eq!(konten.get("claude:sitzung-hen").map(String::as_str), Some("henneberg"));
+    }
+
+    #[test]
+    fn eine_sitzung_unter_zwei_konten_wird_weggelassen() {
+        // DER KERN der Vorsicht. Eine unklare Zuordnung gehoert nicht in eine
+        // Auswertung: Eine Luecke sieht man, eine falsche Zuordnung nicht. Am
+        // 16.10.2026 bekamen 2066 Sitzungen ein geratenes Konto, und niemand
+        // konnte es hinterher erkennen.
+        let heim = wegwerf_heim("mehrdeutig");
+        kontoordner_bauen(
+            &heim,
+            ".local/state/imkr/accounts/claude/department",
+            "department@peppermint-digital.de",
+            &[("-home-x-a", "dieselbe")],
+        );
+        kontoordner_bauen(
+            &heim,
+            ".local/state/imkr/accounts/claude/henneberg",
+            "henneberg@peppermint-digital.de",
+            &[("-home-x-b", "dieselbe")],
+        );
+
+        assert!(
+            !konten_aus_kontoordnern(&heim).contains_key("claude:dieselbe"),
+            "eine mehrdeutige Sitzung darf nicht zugeordnet werden"
+        );
+    }
+
+    #[test]
+    fn ein_ordner_ohne_anmeldung_liefert_nichts() {
+        let heim = wegwerf_heim("ohne-anmeldung");
+        let ordner = heim.join(".claude");
+        std::fs::create_dir_all(&ordner).expect("Ordner");
+        std::fs::write(ordner.join(".claude.json"), r#"{"projects":{}}"#).expect("Datei");
+
+        assert_eq!(konto_des_ordners(&ordner), None);
+        assert!(konten_aus_kontoordnern(&heim).is_empty());
     }
 
     // -- Claude --------------------------------------------------------------
