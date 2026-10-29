@@ -11,7 +11,7 @@ Argument zeigt sie.
 |---|---|
 | `einrichten` | Der ganze Rechner in einem Befehl: verbinden, Skills und MCP-Server abgleichen, MCP-Eintrag in Claude Code, Codex, `pi` und die imkr-Konten, Gedaechtnis abgleichen, Leitungsdienst und Tray anbieten — und eine Zusammenfassung, die nachliest statt zu behaupten. Schon verbunden? Dann faellt Schritt 1 aus. |
 | `connect [domain]` | Rechner mit einer Instanz verbinden. Ohne Angabe die Instanz, von der das Programm kam. |
-| `status` | Zeigt die aktuelle Verbindung. |
+| `status [--json]` | Haengt dieser Rechner? Echt gemessen — ein kurzer angemeldeter Aufruf gegen die Instanz, drei Sekunden Frist — samt Leitung, Tunnel, Taktgeber und Laeufen. `grund` ist eines von drei Woertern: `ok`, `abgemeldet`, `nicht erreichbar`. Die Statuszeile des imkr-Plugins liest das alle 30 Sekunden. |
 | `configure` | Traegt den MCP-Server in Claude Code und Codex ein. |
 | `disconnect` | Entfernt die lokale Verbindung. |
 | `freigabe [add <pfad>]` | Verzeichnisse, in denen Laeufe mehr duerfen als fragen. |

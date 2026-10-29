@@ -81,7 +81,11 @@ Gedaechtnis abgleichen, Leitungsdienst und Tray anbieten &mdash; und eine Zusamm
 nachliest statt zu behaupten. Schon verbunden? Dann faellt Schritt 1 aus.</td></tr>
 <tr><td><code>connect [domain]</code></td><td>Rechner mit einer Instanz verbinden. Ohne Angabe
 die Instanz, von der das Programm kam.</td></tr>
-<tr><td><code>status</code></td><td>Zeigt die aktuelle Verbindung.</td></tr>
+<tr><td><code>status [--json]</code></td><td>Haengt dieser Rechner? Echt gemessen &mdash; ein
+kurzer angemeldeter Aufruf gegen die Instanz, drei Sekunden Frist &mdash; samt Leitung, Tunnel,
+Taktgeber und Laeufen. <code>grund</code> ist eines von drei Woertern: <code>ok</code>,
+<code>abgemeldet</code>, <code>nicht erreichbar</code>. Die Statuszeile des imkr-Plugins liest
+das alle 30 Sekunden.</td></tr>
 <tr><td><code>configure</code></td><td>Traegt den MCP-Server in Claude Code und Codex ein.</td></tr>
 <tr><td><code>disconnect</code></td><td>Entfernt die lokale Verbindung.</td></tr>
 <tr><td><code>freigabe [add &lt;pfad&gt;]</code></td><td>Verzeichnisse, in denen Laeufe mehr duerfen
