@@ -930,6 +930,13 @@ fn grenze(args: &[String]) -> usize {
 /// auf 2066 historische Sitzungen, obwohl ein Teil davon unter `department`
 /// lief. Darum haengt das Konto jetzt daran, dass eine BESTIMMTE Sitzung
 /// gemeint ist — und das ist nur im Hook der Fall.
+///
+/// **Nachtrag vom 29.10.2026:** Hier stand bis dahin nur der Satz oben, und er
+/// liest sich wie „nachholend gibt es nie ein Konto". Das gilt fuer DIESE
+/// Funktion weiter, aber nicht mehr fuer die Meldung: Ein nachholender Lauf
+/// holt das Konto jeder Sitzung einzeln aus {@link konten_laden}. Was hier
+/// `None` liefert, ist also nicht das Ende der Zuordnung, sondern ihr Anfang —
+/// der Merkzettel entscheidet danach, und auch er raet nicht.
 fn konto(args: &[String], gemeinte: Option<&str>) -> Option<String> {
     if let Some(genannt) = args
         .iter()
