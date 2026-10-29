@@ -696,6 +696,14 @@ pub struct VerbindungKurz {
 /// Die Erreichbarkeit sagt die Leitung selbst, solange sie laeuft: `lage`
 /// steht dann auf `verbunden` bzw. nennt den Grund. Deshalb zeigt der Tray
 /// beides nebeneinander statt einer Zahl, die beides vermischt.
+///
+/// **Wer das „vereinheitlichen" will, lese erst den Takt.** Seit dem 29.10.2026
+/// gibt es die echte Messung — in `ai-brain-harness status [--json]`, siehe
+/// {@link crate::stand} und {@link erreichbarkeit}. Sie steht dort und nicht
+/// hier, weil `status` alle **30** Sekunden gelesen wird (imkr-Plugin) und
+/// dieser Befehl alle **zwei** (Tray). Dieselbe Anfrage im Zwei-Sekunden-Takt
+/// waere das Fuenfzehnfache an Last fuer eine Auskunft, die sich nicht so
+/// schnell aendert.
 fn verbindung_zeigen() -> Option<VerbindungKurz> {
     let c = config::load().ok()?;
     let geraet = geraet_name(&c);
