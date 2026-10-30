@@ -31,6 +31,7 @@ mod auftrag;
 mod chat;
 mod config;
 mod dauerauftrag;
+mod devstack;
 mod discovery;
 mod erinnerungen;
 mod freigabe;
@@ -101,6 +102,9 @@ Aufrufe:
                                   (an [--dauer 30m] | aus | status), Standard aus
   ai-brain-harness tunnel [...]       Den Browser deines Rechners an einen Agenten
                                   hier geben (start | status | stop)
+  ai-brain-harness devstack [..]      Einen lokalen Dev-Stack der Instanz ohne
+                                  Browser steuern (status | start | stop |
+                                  liste <projekt>)
   ai-brain-harness logs <kennung>     Was ein Lauf geschrieben hat
   ai-brain-harness stop <kennung>     Einen Lauf beenden
   ai-brain-harness status [--json]    Haengt dieser Rechner? Prueft die Instanz echt
@@ -271,6 +275,7 @@ fn main() -> ExitCode {
         Some("schleife") => schleife::verwalten(&args[1..]),
         Some("verbrauch") => verbrauch::verwalten(&args[1..]),
         Some("tunnel") => tunnel::verwalten(&args[1..]),
+        Some("devstack") => devstack::verwalten(&args[1..]),
         Some("leitung") => leitung::verwalten(&args[1..]),
         Some("erinnerungen") => erinnerungen::abgleichen(&args[1..]),
         Some("auftraege") => auftrag::anzeigen(&args[1..]),
