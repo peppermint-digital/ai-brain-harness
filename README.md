@@ -173,6 +173,12 @@ Was eine Instanz bereithält, steht unter `https://deine-domain.de/install.json`
 > für eine Plattform nichts bereit, sagt das Skript das und verweist auf den
 > Quelltext, statt eine kaputte Datei zu installieren.
 >
+> Seit dem 10.11.2026 ruft der Zeitplan von AI Brain diesen Befehl selbst —
+> nächtlich um 04:50. Eine neue Version ist damit am nächsten Morgen auf den
+> Rechnern, ohne dass jemand daran denken muss. Der Preis gehört dazu: Was im
+> letzten Release liegt, liegt dann auch hier; ein zurückgezogenes Release muss
+> zurückgezogen **werden**, nicht nur „nicht geholt".
+>
 > **Bauen kannst du selbst — GitHub Actions braucht es dafür nicht.** Linux
 > direkt mit `cargo build --release`, Windows in einem Container:
 >
@@ -283,8 +289,17 @@ install -m 755 target/release/ai-brain-harness ~/.local/bin/
 | Plattform | Stand |
 |---|---|
 | Linux x86-64 | Ende zu Ende erprobt, fertiges Programm auf der Instanz |
+| Linux ARM64 (Raspberry Pi) | seit v0.8.0 im Release (`ubuntu-24.04-arm`) und auf der Instanz; Start auf Raspberry Pi OS trixie geprüft, **Einrichtung dort noch nicht durchgelaufen** |
 | Windows x86-64 | gebaut (GNU-Ziel, im Container); Installer gegen die echte Instanz durchgespielt, aber **auf echtem Windows noch nicht gelaufen** |
-| macOS | wird auf dem Mac selbst gebaut, **noch nicht im Feld erprobt** |
+| macOS | seit dem 29.10.2026 im Release und auf der Instanz (Apple Silicon und Intel); **im Feld noch nicht erprobt** — der Mac baut es sich sonst selbst |
+
+**Linux ARM64 heißt 64 Bit und eine glibc ab 2.39.** Das Programm wird auf
+`ubuntu-24.04-arm` gebaut, und ein gnu-Programm läuft nur auf einer glibc, die
+mindestens so neu ist wie die, gegen die es gebaut wurde: Raspberry Pi OS
+trixie (2.43) ja, bookworm (2.36) nein. Für bookworm müsste die Matrix auf
+`ubuntu-22.04-arm` bauen. Ein 32-Bit-System (`armv7l`, das alte Raspbian) ist
+gar nicht gemeint — dort fällt das Installationsskript auf den Quelltext
+zurück.
 
 Die Pfadauflösung unterscheidet sich zwischen den Systemen: `HOME` gibt es unter
 Windows nicht, dort heißt es `USERPROFILE`, und die Verbindungsdaten gehören
