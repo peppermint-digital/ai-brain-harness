@@ -69,6 +69,29 @@ jobs:
             ziel: x86_64-unknown-linux-gnu
             datei: ai-brain-harness
             tray: true
+          # Linux/aarch64 — der Raspberry Pi (#9735). Kein Kreuzbau, sondern
+          # ein eigener Laeufer: `ubuntu-24.04-arm` ist fuer oeffentliche
+          # Repositories kostenlos, und wer dort baut, braucht weder
+          # Linker-Pakete noch ein fremdes Sysroot.
+          #
+          # ## Warum die Fassung dasteht und nicht `-latest`
+          #
+          # Ein gnu-Programm laeuft nur auf einer glibc, die MINDESTENS so neu
+          # ist wie die, gegen die es gebaut wurde — nach unten ist nichts
+          # verhandelbar. Ubuntu 24.04 bringt 2.39, der Testrechner
+          # (Raspberry Pi OS trixie) hat 2.43: passt. Mit `ubuntu-latest-arm`
+          # (gibt es ohnehin nicht als Marke) oder einem stillen Sprung auf
+          # 26.04 waere die Untergrenze ohne Zutun gewandert, und das faellt
+          # erst auf dem Pi auf.
+          #
+          # Nach unten begrenzt das zugleich: Raspberry Pi OS bookworm (2.36)
+          # bekommt mit diesem Bau KEIN laufendes Programm. Wer das braucht,
+          # baut hier auf `ubuntu-22.04-arm` (2.35) — dieselbe Zeile, eine
+          # aeltere Marke, und das Ziel heisst unveraendert gnu.
+          - os: ubuntu-24.04-arm
+            ziel: aarch64-unknown-linux-gnu
+            datei: ai-brain-harness
+            tray: true
           # Beide macOS-Ziele auf demselben Laeufer: Das SDK bringt beide
           # Architekturen mit, Rust kann von Apple Silicon nach Intel bauen.
           # Der frueher hier stehende `macos-13`-Laeufer ist ausgemustert — der

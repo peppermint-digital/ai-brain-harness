@@ -59,6 +59,11 @@ ziel_erkennen() {
 
     case "$system/$arch" in
         Linux/x86_64)          echo "x86_64-unknown-linux-gnu" ;;
+        # Der Raspberry Pi (#9735). `arm64` steht daneben, weil nicht jeder
+        # Kernel `aarch64` meldet — dasselbe Programm, zwei Schreibweisen.
+        # Ein 32-Bit-ARM (`armv7l`, `armhf`) ist NICHT gemeint und faellt
+        # absichtlich in den Quelltext-Zweig.
+        Linux/aarch64|Linux/arm64)   echo "aarch64-unknown-linux-gnu" ;;
         Darwin/arm64|Darwin/aarch64) echo "aarch64-apple-darwin" ;;
         Darwin/x86_64)         echo "x86_64-apple-darwin" ;;
         *)                     echo "" ;;
